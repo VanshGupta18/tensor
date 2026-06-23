@@ -8,7 +8,6 @@ export default function DashboardScreen({
   error,
   onLogout,
   onShowDetails,
-  onEditDetails,
   onOpenChat,
 }) {
   const [remarksTarget, setRemarksTarget] = useState(null); // null = closed, 'all' = global, tender obj = per-row
@@ -127,9 +126,6 @@ export default function DashboardScreen({
                           <div style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
                             <button onClick={(e) => { e.stopPropagation(); onShowDetails(t); }} className="btn btn-secondary" style={btnStyle}>
                               Details
-                            </button>
-                            <button onClick={(e) => { e.stopPropagation(); onEditDetails(t); }} className="btn btn-ghost" style={btnStyle}>
-                              Edit
                             </button>
                             <button onClick={(e) => { e.stopPropagation(); setRemarksTarget(t); }} className="btn btn-ghost" style={btnStyle}>
                               Remarks

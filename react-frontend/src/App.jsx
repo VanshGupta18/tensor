@@ -101,7 +101,6 @@ function App() {
               error={error}
               onLogout={handleLogout}
               onShowDetails={handleShowDetails}
-              onEditDetails={handleEditDetails}
               onOpenChat={handleOpenChat}
             />
           )}

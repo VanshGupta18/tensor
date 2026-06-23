@@ -91,7 +91,7 @@ function App() {
       )}
 
       {screen !== 'login' && (
-        <>
+        <div className={`app-container ${isChatOpen ? 'chat-open' : ''}`}>
           {screen === 'dashboard' && (
             <DashboardScreen
               username={user}
@@ -140,7 +140,7 @@ function App() {
             tenderId={chatTenderId}
             onUploadComplete={refresh}
           />
-        </>
+        </div>
       )}
     </>
   );

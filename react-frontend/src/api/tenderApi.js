@@ -177,17 +177,20 @@ export async function downloadTender(tender) {
     URL.revokeObjectURL(url);
 
   } catch (err) {
-    console.warn('PDF download failed, falling back to JSON:', err.message);
-    // Fallback: download as JSON
+    console.error('PDF download failed, falling back to JSON export:', err.message);
+    // Fallback: download as JSON (includes AI-extracted fields so data is not lost)
     const downloadData = {
-      tenderId:       tender.id,
-      version:        tender.version,
-      title:          tender.title,
-      createdBy:      tender.createdBy,
-      lastReviewedBy: tender.lastReviewedBy,
-      lastChangedBy:  tender.lastChangedBy,
-      details:        tender.details,
-      remarksHistory: tender.remarks,
+      tenderId:        tender.id,
+      version:         tender.version,
+      title:           tender.title,
+      createdBy:       tender.createdBy,
+      lastReviewedBy:  tender.lastReviewedBy,
+      lastChangedBy:   tender.lastChangedBy,
+      details:         tender.details,
+      remarksHistory:  tender.remarks,
+      summary:         tender.summary         || null,
+      keyTerms:        tender.keyTerms        || null,
+      confidenceScore: tender.confidenceScore || null,
     };
     const jsonString = `data:text/json;charset=utf-8,${encodeURIComponent(JSON.stringify(downloadData, null, 2))}`;
     const a = document.createElement('a');
@@ -196,5 +199,7 @@ export async function downloadTender(tender) {
     document.body.appendChild(a);
     a.click();
     a.remove();
+    // Re-throw so the caller (UI) can show a warning that PDF failed
+    throw new Error(`PDF generation failed — downloaded as JSON instead. (${err.message})`);
   }
 }

@@ -309,11 +309,25 @@ def _build_section_table(sub_headings: list, styles, page_w: float,
         else:
             if not content:
                 continue  # Skip rows with no extracted content
-            cell_content = _safe(content).replace("\n", "<br/>")
-            rows.append([
-                Paragraph(_safe(label), styles["CellLabel"]),
-                Paragraph(cell_content, styles["CellValue"]),
-            ])
+            # Long content can't fit in a table cell — a single row taller than
+            # the page frame causes ReportLab to crash. Render as label + paragraph.
+            if len(content) > 600:
+                if rows:
+                    data_rows = rows[1:] if col_headers else rows
+                    if data_rows:
+                        flowables.extend(_emit_table(rows, page_w, depth, bool(col_headers)))
+                    rows = ([
+                        [Paragraph(col_headers[0], styles["ColHeader"]),
+                         Paragraph(col_headers[1], styles["ColHeader"])]
+                    ] if col_headers else [])
+                flowables.append(Paragraph(f"<b>{_safe(label)}</b>", styles["SubLabel"]))
+                flowables.append(Paragraph(_safe(content).replace("\n", "<br/>"), styles["BodyPara"]))
+            else:
+                cell_content = _safe(content).replace("\n", "<br/>")
+                rows.append([
+                    Paragraph(_safe(label), styles["CellLabel"]),
+                    Paragraph(cell_content, styles["CellValue"]),
+                ])
 
     if rows:
         # Don't emit a header-only table (all data rows were skipped as empty)

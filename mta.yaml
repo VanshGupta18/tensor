@@ -1,0 +1,86 @@
+_schema-version: "3.1"
+ID: tender-platform
+description: SAP BTP Tender Management Platform
+version: 1.0.0
+
+build-parameters:
+  before-all:
+    - builder: custom
+      commands:
+        # 1. Build React → outputs to cap-backend/app/ (see vite.config.js outDir)
+        - npm ci --prefix react-frontend
+        - npm run build --prefix react-frontend
+        # 2. Run cds build — generates gen/srv (Node.js app + React static files)
+        #    and gen/db (HANA HDI artifacts)
+        - npm ci --prefix cap-backend
+        - npm run build --prefix cap-backend
+
+modules:
+  # ── Python AI Service ──────────────────────────────────────────────────────
+  # Deployed first so its CF URL is available for the CAP module env var.
+  - name: tender-python-ai
+    type: python
+    path: python-ai-service
+    parameters:
+      buildpack: python_buildpack
+      memory: 512M
+      disk-quota: 2G
+    build-parameters:
+      ignore:
+        - .venv/
+        - __pycache__/
+        - uploads/
+        - .env
+    provides:
+      - name: tender-python-ai-api
+        properties:
+          url: ${default-url}
+    # NOTE: After deploying, set AI Core credentials on this CF app:
+    #   cf set-env tender-python-ai TOKEN_URL      "<value>"
+    #   cf set-env tender-python-ai CLIENT_ID      "<value>"
+    #   cf set-env tender-python-ai CLIENT_SECRET  "<value>"
+    #   cf set-env tender-python-ai MODEL_BASE_URL "<value>"
+    #   cf set-env tender-python-ai MODEL_ENDPOINT "<value>"
+    #   cf restage tender-python-ai
+
+  # ── CAP Backend (Node.js service + React static files) ────────────────────
+  - name: tender-cap-srv
+    type: nodejs
+    path: gen/srv
+    parameters:
+      buildpack: nodejs_buildpack
+      memory: 512M
+      disk-quota: 512M
+    properties:
+      NODE_ENV: production
+      PYTHON_AI_URL: ~{tender-python-ai-api/url}
+    requires:
+      - name: tender-hana
+      - name: tender-xsuaa
+      - name: tender-python-ai-api
+
+  # ── HANA DB Deployer ───────────────────────────────────────────────────────
+  # One-shot CF task that pushes schema artifacts into the HDI container.
+  - name: tender-db-deployer
+    type: hdb
+    path: gen/db
+    parameters:
+      buildpack: nodejs_buildpack
+    requires:
+      - name: tender-hana
+
+resources:
+  # ── SAP HANA Cloud (HDI container) ─────────────────────────────────────────
+  - name: tender-hana
+    type: com.sap.xs.hana-hdi-container
+    parameters:
+      service: hana
+      service-plan: hdi-shared
+
+  # ── XSUAA (OAuth2 / authentication) ───────────────────────────────────────
+  - name: tender-xsuaa
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: xsuaa
+      service-plan: application
+      path: ./xs-security.json

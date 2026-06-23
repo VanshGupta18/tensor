@@ -1,0 +1,49 @@
+{
+  "xsappname": "tender-platform",
+  "tenant-mode": "dedicated",
+  "description": "Tender Management Platform – XSUAA security descriptor",
+  "scopes": [
+    {
+      "name": "$XSAPPNAME.admin",
+      "description": "Full access: create, update, approve tenders"
+    },
+    {
+      "name": "$XSAPPNAME.reviewer",
+      "description": "Read and review tenders; cannot approve"
+    }
+  ],
+  "attributes": [],
+  "role-templates": [
+    {
+      "name": "Admin",
+      "description": "Tender administrator",
+      "scope-references": [
+        "$XSAPPNAME.admin",
+        "$XSAPPNAME.reviewer"
+      ]
+    },
+    {
+      "name": "Reviewer",
+      "description": "Tender reviewer",
+      "scope-references": [
+        "$XSAPPNAME.reviewer"
+      ]
+    }
+  ],
+  "role-collections": [
+    {
+      "name": "TenderAdmin",
+      "description": "Tender Platform Administrator",
+      "role-template-references": [
+        "$XSAPPNAME.Admin"
+      ]
+    },
+    {
+      "name": "TenderReviewer",
+      "description": "Tender Platform Reviewer",
+      "role-template-references": [
+        "$XSAPPNAME.Reviewer"
+      ]
+    }
+  ]
+}

@@ -123,7 +123,7 @@ export default function DashboardScreen({
                         <td>{t.createdBy}</td>
                         <td>{t.lastReviewedBy}</td>
                         <td>{t.lastChangedBy}</td>
-                        <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        <td onClick={(e) => e.stopPropagation()} style={{ textAlign: 'right', whiteSpace: 'nowrap', cursor: 'default' }}>
                           <div style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
                             <button onClick={(e) => { e.stopPropagation(); onShowDetails(t); }} className="btn btn-secondary" style={btnStyle}>
                               Details

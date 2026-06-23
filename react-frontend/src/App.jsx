@@ -78,6 +78,7 @@ function App() {
     try {
       await deleteTender(tender.id);
       refresh();
+      setScreen('dashboard');
     } catch (err) {
       alert('Delete failed: ' + err.message);
     }
@@ -101,9 +102,7 @@ function App() {
               onLogout={handleLogout}
               onShowDetails={handleShowDetails}
               onEditDetails={handleEditDetails}
-              onDownload={handleDownloadDetails}
               onOpenChat={handleOpenChat}
-              onDelete={handleDelete}
             />
           )}
 
@@ -114,6 +113,8 @@ function App() {
               onBack={() => setScreen('dashboard')}
               onSaveChanges={onSaveChanges}
               onOpenChat={() => handleOpenChat(selectedTender)}
+              onDownload={handleDownloadDetails}
+              onDelete={handleDelete}
             />
           )}
 

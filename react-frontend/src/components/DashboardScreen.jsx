@@ -9,9 +9,7 @@ export default function DashboardScreen({
   onLogout,
   onShowDetails,
   onEditDetails,
-  onDownload,
   onOpenChat,
-  onDelete,
 }) {
   const [remarksTarget, setRemarksTarget] = useState(null); // null = closed, 'all' = global, tender obj = per-row
 
@@ -133,18 +131,6 @@ export default function DashboardScreen({
                             <button onClick={(e) => { e.stopPropagation(); onEditDetails(t); }} className="btn btn-ghost" style={btnStyle}>
                               Edit
                             </button>
-                            <button onClick={(e) => { e.stopPropagation(); onDownload(t); }} className="btn btn-ghost" style={btnStyle}>
-                              ↓
-                            </button>
-                            {onDelete && (
-                              <button
-                                onClick={(e) => { e.stopPropagation(); onDelete(t); }}
-                                className="btn btn-ghost"
-                                style={{ ...btnStyle, color: 'var(--danger)', borderColor: 'var(--danger)' }}
-                              >
-                                Delete
-                              </button>
-                            )}
                           </div>
                         </td>
                       </tr>

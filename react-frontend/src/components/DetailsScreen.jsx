@@ -2,7 +2,15 @@ import React, { useState, useEffect } from 'react';
 import SubmitRemarksModal from './SubmitRemarksModal';
 import { getTenderDocuments, updateAIResult } from '../api/tenderApi.js';
 
-export default function DetailsScreen({ tender, initialIsEditing, onBack, onSaveChanges, onOpenChat }) {
+export default function DetailsScreen({
+  tender,
+  initialIsEditing,
+  onBack,
+  onSaveChanges,
+  onOpenChat,
+  onDownload,
+  onDelete,
+}) {
   const [isEditing,   setIsEditing]   = useState(initialIsEditing);
   const [title,       setTitle]       = useState(tender.title);
   const [budget,      setBudget]      = useState(tender.details.budget);
@@ -219,7 +227,15 @@ export default function DetailsScreen({ tender, initialIsEditing, onBack, onSave
           </div>
           <div className="nav-actions">
             {!isEditing ? (
-              <button onClick={() => setIsEditing(true)} className="btn btn-secondary">Edit</button>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <button onClick={() => setIsEditing(true)} className="btn btn-secondary">Edit</button>
+                {onDownload && (
+                  <button onClick={() => onDownload(tender)} className="btn btn-secondary">Download</button>
+                )}
+                {onDelete && (
+                  <button onClick={() => onDelete(tender)} className="btn btn-danger">Delete</button>
+                )}
+              </div>
             ) : (
               <>
                 <button onClick={handleCancelEdit} className="btn btn-ghost">Cancel</button>

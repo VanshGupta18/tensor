@@ -720,8 +720,11 @@ def generate_summary(token, API_URL, file_path_list):
 
     # Restore concatenated fields
     for dot_key, values in accumulated.items():
-        section, field = dot_key.split('.', 1)
-        merged[section][field] = "\n\n".join(values)
+        if '.' in dot_key:
+            section, field = dot_key.split('.', 1)
+            merged[section][field] = "\n\n".join(values)
+        else:
+            merged[dot_key] = "\n\n".join(values)
 
     return json.dumps(merged, indent=4, ensure_ascii=False)
 

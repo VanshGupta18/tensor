@@ -1,0 +1,33 @@
+# Node
+node_modules/
+npm-debug.log*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+
+# Build artifacts
+dist/
+gen/
+mta_archives/
+*_mta_build_tmp
+*.mtar
+
+# Secrets / local config
+.env
+default-env.json
+
+# DB
+*.sqlite
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Uploads (ephemeral)
+python-ai-service/uploads/*.pdf
+python-ai-service/uploads/*.PDF
+python-ai-service/uploads/*_split/

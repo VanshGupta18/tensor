@@ -1,0 +1,47 @@
+SAP BTP TRIAL ACCOUNT 
+	SAP HANA DATABASE FOR STORING FILES AS BLOBS 
+
+SAP BAS For Code, React and Python Code as well as HANA script. 
+
+SAP CAPM service for API calls of python. 
+
+ 
+
+REACT UI SCREENS 
+ 
+1. SCREEN 1 
+Login Page to access the services 
+
+2. SCREEN 2 
+A table with 5-6 fields about tender like tender id, version, and other header details , 
+fields like Created By, Last Reviewed By, Last Changed By ,a button for Remarks for 
+changes and a button for each row to show complete details and a button to download details. 
+ 
+3. SCREEN 3  
+On clicking Show complete details, complete details for that specific tender will show up as 
+heading and placeholders which are freezed and on clicking edit button on top of page they are 
+allowed to edit and on editing each field keep track of which fields are edited and on clicking 
+submit changes a popup which will ask remarks from user for each field changes by user and on 
+clicking submit the changes are saved and last changed by show user name and the table with field
+ name and remarks saved and on clicking Remarks for changes on screen 2 that file need to be 
+ display as table. 
+
+4. On Screen 2 there must be a button for Chatbot and on clicking Chatbot either in same screen or
+ different screen open chatbot window which has option to choose file and text field and send 
+ button and chat field which show conversation between user and chatbot. 
+
+5. If on sending check in backend if there is a file uploaded then call a api  /process_file 
+with file being sent will be split in 50 page per pdf each pdf will be stored in hana db then 
+each pdf will go to ai to get results as json file and in end final json will be given as result
+ from ai  can be managed later and if no file is selected and just text then another api /response 
+ with text being sent to ai to get text result in chatbot conversations both need to be shown 
+ if file is there show particular fields from json and if text response show text response  
+ 
+6. The json from ai need to be stored in hana db with proper file naming and map to show results
+ in screen2 as well as screen3  
+
+ Nishat
+1. upload button in side of remarks button. this button will open chatbot
+2. when chatbot opens make site responsive
+3. download and delete button on details screen, remove them from dashboard screen
+4. remarks button on every tender row

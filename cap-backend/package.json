@@ -1,0 +1,40 @@
+{
+  "name": "Tensor",
+  "version": "1.0.0",
+  "dependencies": {
+    "@cap-js/hana": "^2",
+    "@sap/cds": "^9",
+    "axios": "^1.18.0",
+    "form-data": "^4.0.6",
+    "multer": "^2.2.0"
+  },
+  "devDependencies": {
+    "@cap-js/sqlite": "^2.4",
+    "@sap/cds-dk": "^9"
+  },
+  "scripts": {
+    "start": "cds-serve",
+    "watch": "cds watch",
+    "dev": "cds watch",
+    "build": "cds build --production"
+  },
+  "private": true,
+  "cds": {
+    "server": {
+      "body_parser": {
+        "limit": "50mb"
+      }
+    },
+    "fiori": {
+      "bypass_draft": true
+    },
+    "requires": {
+      "db": {
+        "kind": "hana-cloud"
+      },
+      "auth": {
+        "kind": "dummy"
+      }
+    }
+  }
+}

@@ -25,6 +25,9 @@
         "limit": "50mb"
       }
     },
+    "fiori": {
+      "bypass_draft": true
+    },
     "requires": {
       "db": {
         "kind": "hana-cloud"

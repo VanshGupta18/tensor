@@ -72,7 +72,7 @@ export async function getTenders() {
  * Fetch a single tender by ID.
  */
 export async function getTenderById(id) {
-  const t = await api.get(`/Tenders('${encodeURIComponent(id)}')?$expand=audits`);
+  const t = await api.get(`/Tenders(ID='${encodeURIComponent(id)}',IsActiveEntity=true)?$expand=audits`);
   return toReactShape(t);
 }
 
@@ -88,7 +88,7 @@ export async function deleteTender(id) {
  * Returns refreshed tender in React shape.
  */
 export async function updateTender(id, formValues, changedBy) {
-  await api.patch(`/Tenders('${encodeURIComponent(id)}')`, toCapShape(formValues, changedBy));
+  await api.patch(`/Tenders(ID='${encodeURIComponent(id)}',IsActiveEntity=true)`, toCapShape(formValues, changedBy));
   return getTenderById(id);
 }
 
@@ -96,7 +96,7 @@ export async function updateTender(id, formValues, changedBy) {
  * Mark tender as "reviewed" by updating lastReviewedBy.
  */
 export async function markReviewed(id, username) {
-  await api.patch(`/Tenders('${encodeURIComponent(id)}')`, { lastReviewedBy: username });
+  await api.patch(`/Tenders(ID='${encodeURIComponent(id)}',IsActiveEntity=true)`, { lastReviewedBy: username });
   return getTenderById(id);
 }
 
@@ -147,25 +147,54 @@ export async function updateAIResult(id, sections) {
 }
 
 /**
- * Client-side JSON download (no API call needed).
- * Identical to the existing mock implementation.
+ * Download tender as a formatted PDF synopsis.
+ * Calls the CAP generatePDF action which returns a base64-encoded PDF.
+ * The base64 string is decoded into a Blob and downloaded as a .pdf file.
+ * Falls back to a client-side JSON export if the PDF endpoint fails.
  */
-export function downloadTender(tender) {
-  const downloadData = {
-    tenderId:      tender.id,
-    version:       tender.version,
-    title:         tender.title,
-    createdBy:     tender.createdBy,
-    lastReviewedBy:tender.lastReviewedBy,
-    lastChangedBy: tender.lastChangedBy,
-    details:       tender.details,
-    remarksHistory:tender.remarks,
-  };
-  const jsonString = `data:text/json;charset=utf-8,${encodeURIComponent(JSON.stringify(downloadData, null, 2))}`;
-  const a = document.createElement('a');
-  a.setAttribute('href', jsonString);
-  a.setAttribute('download', `tender_${tender.id}_v${tender.version}.json`);
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+export async function downloadTender(tender) {
+  try {
+    // callAction returns the OData action result — a base64 string
+    const result = await callAction('generatePDF', { tenderId: tender.id });
+
+    // The OData action wraps the return value in { value: "..." }
+    const b64 = result?.value ?? result;
+    if (!b64 || typeof b64 !== 'string') throw new Error('Empty or invalid PDF data returned');
+
+    // Decode base64 → Uint8Array → Blob
+    const binary = atob(b64);
+    const bytes  = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const blob = new Blob([bytes], { type: 'application/pdf' });
+
+    const url = URL.createObjectURL(blob);
+    const a   = document.createElement('a');
+    a.href     = url;
+    a.download = `tender_${tender.tenderNo || tender.id}_synopsis.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+
+  } catch (err) {
+    console.warn('PDF download failed, falling back to JSON:', err.message);
+    // Fallback: download as JSON
+    const downloadData = {
+      tenderId:       tender.id,
+      version:        tender.version,
+      title:          tender.title,
+      createdBy:      tender.createdBy,
+      lastReviewedBy: tender.lastReviewedBy,
+      lastChangedBy:  tender.lastChangedBy,
+      details:        tender.details,
+      remarksHistory: tender.remarks,
+    };
+    const jsonString = `data:text/json;charset=utf-8,${encodeURIComponent(JSON.stringify(downloadData, null, 2))}`;
+    const a = document.createElement('a');
+    a.setAttribute('href', jsonString);
+    a.setAttribute('download', `tender_${tender.id}_v${tender.version}.json`);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
 }

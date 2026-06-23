@@ -30,9 +30,9 @@ module.exports = cds.service.impl(async function (srv) {
   const { Tenders, TenderAudits, Documents, AIResults, ChatHistories } = srv.entities;
 
   // ── Seed initial data (SQLite / HANA) ──────────────────────────────────────
-  srv.after('bootstrap', async () => {
+  cds.on('served', async () => {
     const count = await SELECT.one.from(Tenders).columns('count(*) as n');
-    if (count && count.n === 0) {
+    if (count && Number(count.n) === 0) {
 
       // ── 1. Seed Tenders ────────────────────────────────────────────────────
       await INSERT.into(Tenders).rows([
@@ -263,7 +263,9 @@ module.exports = cds.service.impl(async function (srv) {
     const tender = await SELECT.one.from(Tenders).where({ ID: tenderId });
     if (!tender) return req.error(404, `Tender ${tenderId} not found`);
 
+    const id = cds.utils.uuid();
     const entry = {
+      ID: id,
       tender_ID: tenderId,
       fieldName,
       oldVal,
@@ -272,8 +274,8 @@ module.exports = cds.service.impl(async function (srv) {
       changedBy,
       changedAt: new Date().toISOString()
     };
-    const result = await INSERT.into(TenderAudits).entries(entry);
-    return result;
+    await INSERT.into(TenderAudits).entries(entry);
+    return SELECT.one.from(TenderAudits).where({ ID: id });
   });
 
   // ── Action: processFile ──────────────────────────────────────────────────────
@@ -468,7 +470,21 @@ module.exports = cds.service.impl(async function (srv) {
         mimeType: mimeType || 'application/octet-stream', content, uploadedBy, uploadedAt
       });
 
-      // Save AIResult linked to document
+      // Generate PDF synopsis via Python and save alongside the JSON
+      let pdfBuffer = null;
+      if (axios) {
+        try {
+          const pdfRes = await axios.post(`${PYTHON_AI_URL}/generate_pdf`, {
+            sections,
+            title: aiTender.summary || extractedTitle,
+          }, { timeout: 30_000, responseType: 'arraybuffer' });
+          pdfBuffer = Buffer.from(pdfRes.data);
+        } catch (pdfErr) {
+          console.warn('[TenderService] PDF generation skipped:', pdfErr.message);
+        }
+      }
+
+      // Save AIResult linked to document (with PDF bytes if available)
       await INSERT.into(AIResults).entries({
         ID:             cds.utils.uuid(),
         document_ID:    docId,
@@ -476,6 +492,7 @@ module.exports = cds.service.impl(async function (srv) {
         summary:        aiTender.summary || '',
         keyTerms:       JSON.stringify(aiTender.keyTerms || []),
         rawResponse:    JSON.stringify({ sections }),
+        pdfContent:     pdfBuffer || null,
         processedAt:    new Date().toISOString(),
       });
 
@@ -577,4 +594,70 @@ module.exports = cds.service.impl(async function (srv) {
     return botReply;
   });
 
+  // ── Action: generatePDF ─────────────────────────────────────────────────────
+  // Returns the stored PDF from HANA as a base64 string.
+  // If the PDF was never generated (e.g. seeded data), regenerates it on the fly
+  // and persists it for next time.
+  srv.on('generatePDF', async (req) => {
+    const { tenderId } = req.data;
+    if (!tenderId) return req.error(400, 'tenderId is required');
+
+    // 1. Find the most recent AIResult that has sections for this tender
+    const docs = await SELECT.from(Documents)
+      .where({ tender_ID: tenderId })
+      .orderBy({ uploadedAt: 'desc' });
+
+    let aiResult = null;
+    for (const doc of docs) {
+      const result = await SELECT.one.from(AIResults).where({ document_ID: doc.ID });
+      if (result?.rawResponse) {
+        aiResult = result;
+        break;
+      }
+    }
+
+    if (!aiResult) {
+      return req.error(404, 'No AI-processed data found for this tender. Please upload a PDF first.');
+    }
+
+    // 2. Generate PDF fresh every time (always use latest template)
+    if (!axios) return req.error(503, 'axios not installed');
+
+    let sections = [];
+    try {
+      const parsed = JSON.parse(aiResult.rawResponse);
+      sections = parsed.sections || [];
+    } catch { return req.error(500, 'Failed to parse stored AI data'); }
+
+    let pdfBuffer;
+    try {
+      const pyRes = await axios.post(`${PYTHON_AI_URL}/generate_pdf`, {
+        sections,
+        title: aiResult.summary || 'Tender Synopsis',
+      }, { timeout: 30_000, responseType: 'arraybuffer' });
+      pdfBuffer = Buffer.from(pyRes.data);
+    } catch (err) {
+      let detail = err.message;
+      if (err.response?.data) {
+        try {
+          const buf = Buffer.isBuffer(err.response.data) ? err.response.data : Buffer.from(err.response.data);
+          const body = JSON.parse(buf.toString('utf8'));
+          detail = body?.error || buf.toString('utf8').slice(0, 400);
+        } catch { /* keep err.message */ }
+      }
+      console.error('[TenderService] generatePDF Python error:', detail);
+      return req.error(500, `PDF generation failed: ${detail}`);
+    }
+
+    // Persist so next download is instant (best-effort — skip if column not deployed yet)
+    try {
+      await UPDATE(AIResults).set({ pdfContent: pdfBuffer }).where({ ID: aiResult.ID });
+    } catch (saveErr) {
+      console.warn('[TenderService] Could not cache PDF in HANA (pdfContent column may not be deployed yet):', saveErr.message);
+    }
+
+    return pdfBuffer.toString('base64');
+  });
+
 });
+

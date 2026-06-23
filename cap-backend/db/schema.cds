@@ -68,6 +68,7 @@ entity AIResults : cuid {
     summary         : String(5000);
     keyTerms        : String(2000);         // JSON array stored as string
     rawResponse     : LargeString;          // full Python response JSON
+    pdfContent      : LargeBinary;          // generated PDF synopsis bytes
     processedAt     : Timestamp;
 }
 

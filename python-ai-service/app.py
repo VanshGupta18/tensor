@@ -17,9 +17,10 @@ React → CAP (Node.js) → this service.
 
 import os
 import json
+from io import BytesIO
 from pathlib import Path
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from dotenv import load_dotenv
 
@@ -34,6 +35,7 @@ from functions import (
     generate_chat_response,
     _has_text,
 )
+from pdf_generator import generate_tender_pdf
 
 # ── Environment ────────────────────────────────────────────────────────────────
 load_dotenv()
@@ -194,6 +196,34 @@ def process_file():
         })
 
     return jsonify({"tenders": output_tenders})
+
+
+# ── POST /generate_pdf ─────────────────────────────────────────────────────────
+# Called by CAP when the user clicks "Download" on a tender.
+# Receives the tender's structured JSON sections and returns a formatted PDF.
+# ──────────────────────────────────────────────────────────────────────────────
+@app.route("/generate_pdf", methods=["POST"])
+def generate_pdf():
+    data = request.get_json(force=True) or {}
+    sections = data.get("sections", [])
+    title    = data.get("title", "Tender Synopsis")
+
+    if not sections:
+        return jsonify({"error": "No sections data provided"}), 400
+
+    try:
+        pdf_bytes = generate_tender_pdf(sections, doc_title=title)
+    except Exception as e:
+        return jsonify({"error": f"PDF generation failed: {str(e)}"}), 500
+
+    buf = BytesIO(pdf_bytes)
+    buf.seek(0)
+    return send_file(
+        buf,
+        mimetype="application/pdf",
+        as_attachment=True,
+        download_name="tender_synopsis.pdf",
+    )
 
 
 # ── POST /response ─────────────────────────────────────────────────────────────

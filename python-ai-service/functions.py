@@ -20,7 +20,7 @@ def split_pdf(input_pdf: str, pages_per_file: int):
     total_pages = len(reader.pages)
 
     pdf_name = os.path.splitext(os.path.basename(input_pdf))[0]
-    output_folder = f"{pdf_name}_split"
+    output_folder = os.path.join(os.path.dirname(input_pdf), f"{pdf_name}_split")
 
     os.makedirs(output_folder, exist_ok=True)
 
@@ -100,9 +100,8 @@ def get_result(token, API_URL, payload):
         resp.raise_for_status()
         print("result generate")
     except requests.exceptions.HTTPError as e:
-        r = e.response
         print("HTTPError:", str(e))
-    print(resp)
+        raise
     return (resp.json())["content"][0]["text"]
 
 

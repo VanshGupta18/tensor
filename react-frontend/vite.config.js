@@ -17,6 +17,13 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ''),
       },
+      // Dedicated multipart upload route — raw binary, no base64 inflation
+      '/upload': {
+        target:       'http://localhost:4004',
+        changeOrigin: true,
+        timeout:      300000,    // 5 min — AI processing can be slow
+        proxyTimeout: 300000,
+      },
     },
   },
 })

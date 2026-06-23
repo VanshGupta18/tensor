@@ -89,4 +89,12 @@ service TenderService @(path: '/odata/v4/tender') {
         message  : String,
         sender   : String
     ) returns String;   // the bot's reply text
+
+    /**
+     * Generate (or retrieve cached) PDF synopsis for a tender.
+     * Returns base64-encoded PDF bytes so it works cleanly over OData JSON.
+     */
+    action generatePDF(
+        tenderId : String
+    ) returns String;   // base64-encoded PDF
 }

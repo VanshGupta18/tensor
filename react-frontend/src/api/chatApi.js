@@ -22,26 +22,29 @@ export async function sendChatMessage(message, tenderId = null, sender = 'user')
 
 /**
  * Upload a file for AI processing.
- * Converts the File to a base64-encoded string before sending.
+ * Sends raw binary as multipart/form-data to /upload — no base64 inflation,
+ * avoiding SAP BAS proxy body-size limits that cut large PDFs mid-transfer.
  *
  * @param {File}   file      - Browser File object.
  * @param {string} tenderId  - Optional: context tender ID.
  * @returns {Promise<object>} - Parsed AI result JSON.
  */
 export async function uploadFileForProcessing(file, tenderId = null) {
-  const base64Content = await fileToBase64(file);
+  const formData = new FormData();
+  formData.append('invoice', file);
+  if (tenderId) formData.append('tenderId', tenderId);
 
-  const result = await callAction('processFile', {
-    tenderId,
-    filename: file.name,
-    mimeType: file.type || 'application/octet-stream',
-    content:  base64Content,
-  });
+  const response = await fetch('/upload', { method: 'POST', body: formData });
 
-  // CAP wraps scalar string return in { value: "<json string>" }
-  const rawString = result?.value ?? result;
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+    throw new Error(err.error || `Upload failed: HTTP ${response.status}`);
+  }
+
+  const json      = await response.json();
+  const rawString = json?.value ?? json;
   try {
-    return JSON.parse(rawString);
+    return typeof rawString === 'string' ? JSON.parse(rawString) : rawString;
   } catch {
     return { results: [], message: String(rawString) };
   }
@@ -61,13 +64,3 @@ export async function applyTenderUpdate(tenderId, patch, changedFields) {
   try { return JSON.parse(rawString); } catch { return rawString; }
 }
 
-// ── Utility ──────────────────────────────────────────────────────────────────
-
-function fileToBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload  = () => resolve(reader.result.split(',')[1]); // strip data:...;base64, prefix
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}

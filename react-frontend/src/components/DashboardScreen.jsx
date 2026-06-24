@@ -11,6 +11,15 @@ export default function DashboardScreen({
   onOpenChat,
 }) {
   const [remarksTarget, setRemarksTarget] = useState(null); // null = closed, 'all' = global, tender obj = per-row
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const filteredTenders = tenders.filter((t) => {
+    if (!searchQuery) return true;
+    const query = searchQuery.trim().toLowerCase();
+    const tNo = (t.tenderNo || '').toLowerCase();
+    const tId = (t.id || '').toLowerCase();
+    return tNo.includes(query) || tId.includes(query);
+  });
 
   const btnStyle = {
     padding: '4px 10px',
@@ -54,8 +63,84 @@ export default function DashboardScreen({
 
         {/* Data Table Area */}
         <div className="panel">
-          <div className="table-header" style={{ padding: '20px 24px 0' }}>
-            <h2>Active Tenders</h2>
+          <div className="table-header" style={{ padding: '20px 24px 0', flexWrap: 'wrap', gap: '16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: '280px' }}>
+              <h2>Active Tenders</h2>
+              <div className="search-bar-wrapper" style={{ position: 'relative', width: '240px' }}>
+                <input
+                  type="text"
+                  placeholder="Search by tender ID..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="search-input"
+                  style={{
+                    padding: '8px 12px 8px 36px',
+                    fontSize: '13px',
+                    width: '100%',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: 'var(--radius-md)',
+                    backgroundColor: 'var(--bg-page)',
+                    outline: 'none',
+                    transition: 'all 0.15s ease-in-out',
+                  }}
+                  onFocus={(e) => {
+                    e.target.style.borderColor = 'var(--primary)';
+                    e.target.style.backgroundColor = 'var(--bg-card)';
+                    e.target.style.boxShadow = '0 0 0 3px rgba(37, 99, 235, 0.1)';
+                  }}
+                  onBlur={(e) => {
+                    e.target.style.borderColor = 'var(--border-color)';
+                    e.target.style.backgroundColor = 'var(--bg-page)';
+                    e.target.style.boxShadow = 'none';
+                  }}
+                />
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="var(--text-muted)"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  style={{
+                    position: 'absolute',
+                    left: '12px',
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    pointerEvents: 'none'
+                  }}
+                >
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery('')}
+                    style={{
+                      position: 'absolute',
+                      right: '10px',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      background: 'none',
+                      border: 'none',
+                      cursor: 'pointer',
+                      color: 'var(--text-muted)',
+                      padding: 0,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                    title="Clear search"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="18" y1="6" x2="6" y2="18"></line>
+                      <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                  </button>
+                )}
+              </div>
+            </div>
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
               <button
                 onClick={() => onOpenChat()}
@@ -104,7 +189,7 @@ export default function DashboardScreen({
                     </tr>
                   </thead>
                   <tbody>
-                    {tenders.map((t) => (
+                    {filteredTenders.map((t) => (
                       <tr
                         key={t.id}
                         onClick={() => onShowDetails(t)}
@@ -134,7 +219,7 @@ export default function DashboardScreen({
                         </td>
                       </tr>
                     ))}
-                    {tenders.length === 0 && !loading && (
+                    {filteredTenders.length === 0 && !loading && (
                       <tr>
                         <td colSpan="8" style={{ textAlign: 'center', padding: '32px', color: 'var(--text-muted)' }}>
                           No tenders found.

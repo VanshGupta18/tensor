@@ -192,17 +192,17 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
   const [messages, setMessages] = useState([
     {
       id: 1,
-      text: "Hello! I'm your AI assistant. You can ask me questions about your tenders or upload a PDF document for structured data extraction.",
+      text: "Hello! I'm your AI assistant. You can ask me questions about your tenders or <strong>upload a PDF document</strong> for structured data extraction.",
       sender: 'bot',
       type: 'text',
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     }
   ]);
-  const [inputText,    setInputText]    = useState('');
+  const [inputText, setInputText] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   // { [msgId]: { [resultIndex]: 'pending'|'loading'|'confirmed'|'rejected'|'error' } }
   const [confirmStates, setConfirmStates] = useState({});
-  const fileInputRef   = useRef(null);
+  const fileInputRef = useRef(null);
   const messagesEndRef = useRef(null);
 
   useEffect(() => {

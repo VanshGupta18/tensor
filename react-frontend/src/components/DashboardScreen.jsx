@@ -9,6 +9,7 @@ export default function DashboardScreen({
   onLogout,
   onShowDetails,
   onOpenChat,
+  onOpenFollowUp,
 }) {
   const [remarksTarget, setRemarksTarget] = useState(null); // null = closed, 'all' = global, tender obj = per-row
   const [searchQuery, setSearchQuery] = useState('');
@@ -30,7 +31,7 @@ export default function DashboardScreen({
 
   const statusBadgeStyle = (status) => {
     const map = {
-      Draft:    { background: '#fef9c3', color: '#92400e', border: '1px solid #fde68a' },
+      Draft: { background: '#fef9c3', color: '#92400e', border: '1px solid #fde68a' },
       Reviewed: { background: '#dbeafe', color: '#1e40af', border: '1px solid #bfdbfe' },
       Approved: { background: '#d1fae5', color: '#065f46', border: '1px solid #a7f3d0' },
     };
@@ -163,7 +164,7 @@ export default function DashboardScreen({
           <div className="data-table-container" style={{ padding: '20px' }}>
             {loading && (
               <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
-                Loading tenders from CAP backend…
+                Loading Tenders . . .
               </div>
             )}
 
@@ -214,6 +215,9 @@ export default function DashboardScreen({
                             </button>
                             <button onClick={(e) => { e.stopPropagation(); setRemarksTarget(t); }} className="btn btn-ghost" style={btnStyle}>
                               Remarks
+                            </button>
+                            <button onClick={(e) => { e.stopPropagation(); onOpenFollowUp(t); }} className="btn btn-secondary" style={btnStyle}>
+                              Follow-up
                             </button>
                           </div>
                         </td>

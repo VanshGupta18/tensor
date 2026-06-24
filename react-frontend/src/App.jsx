@@ -15,6 +15,7 @@ function App() {
   // Chatbot state — tracks which tender the chatbot is opened for (null = global)
   const [isChatOpen,     setIsChatOpen]     = useState(false);
   const [chatTenderId,   setChatTenderId]   = useState(null);
+  const [chatMode,       setChatMode]       = useState('normal'); // 'normal' | 'followup'
 
   const {
     tenders,
@@ -37,6 +38,7 @@ function App() {
     setIsChatOpen(false);
     setChatTenderId(null);
     setSelectedTender(null);
+    setChatMode('normal');
   };
 
   // ── Navigation ──────────────────────────────────────────────────────────────
@@ -57,6 +59,13 @@ function App() {
   // ── Open chatbot for a specific tender row (or globally) ────────────────────
   const handleOpenChat = (tender) => {
     setChatTenderId(tender?.id || null);
+    setChatMode('normal');
+    setIsChatOpen(true);
+  };
+
+  const handleOpenFollowUp = (tender) => {
+    setChatTenderId(tender?.id || null);
+    setChatMode('followup');
     setIsChatOpen(true);
   };
 
@@ -102,6 +111,7 @@ function App() {
               onLogout={handleLogout}
               onShowDetails={handleShowDetails}
               onOpenChat={handleOpenChat}
+              onOpenFollowUp={handleOpenFollowUp}
             />
           )}
 
@@ -139,6 +149,9 @@ function App() {
             onClose={() => setIsChatOpen(false)}
             tenderId={chatTenderId}
             onUploadComplete={refresh}
+            mode={chatMode}
+            setMode={setChatMode}
+            tenders={tenders}
           />
         </div>
       )}

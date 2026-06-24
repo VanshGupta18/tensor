@@ -92,7 +92,7 @@ function renderInline(text) {
 }
 
 // ── File upload result renderer ───────────────────────────────────────────────
-function FileResultMessage({ filename, results, message, confirmStates, onConfirm, onReject }) {
+function FileResultMessage({ filename, results, message, confirmStates, onConfirm, onReject, onViewChanges }) {
   if (!results || results.length === 0) {
     return (
       <div>
@@ -110,8 +110,26 @@ function FileResultMessage({ filename, results, message, confirmStates, onConfir
       {results.map((r, i) => {
         const confirmState = confirmStates?.[i]; // 'pending' | 'loading' | 'confirmed' | 'rejected'
 
-        // ── Duplicate found — needs confirmation ──────────────────────────────
         if (r.requiresConfirmation) {
+          if (!r.changedFields || r.changedFields.length === 0) {
+            return (
+              <div key={i} style={{
+                marginBottom: '10px', padding: '10px 12px', borderRadius: '8px',
+                border: '1px solid var(--border-color)', background: 'var(--bg-hover)',
+              }}>
+                <div style={{ fontWeight: 600, fontSize: '13px', marginBottom: '4px', color: 'var(--text-muted)' }}>
+                  ℹ️ No changes found in followup
+                </div>
+                <div style={{ fontSize: '13px', fontWeight: 500, marginBottom: '4px' }}>{r.title}</div>
+                {r.tenderNo && (
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                    Ref: {r.tenderNo}
+                  </div>
+                )}
+              </div>
+            );
+          }
+
           return (
             <div key={i} style={{
               marginBottom: '10px', padding: '10px 12px', borderRadius: '8px',
@@ -129,6 +147,30 @@ function FileResultMessage({ filename, results, message, confirmStates, onConfir
               <div style={{ fontSize: '12px', marginBottom: '10px', color: '#78350f' }}>
                 A tender with this reference already exists. Do you want to update it with the information from this PDF?
               </div>
+
+              {r.changedFields && r.changedFields.length > 0 && (
+                <div style={{ marginBottom: '10px' }}>
+                  <button
+                    type="button"
+                    onClick={() => onViewChanges(r)}
+                    style={{
+                      fontSize: '12px',
+                      color: 'var(--primary)',
+                      background: 'none',
+                      border: 'none',
+                      textDecoration: 'underline',
+                      cursor: 'pointer',
+                      padding: 0,
+                      fontWeight: 600,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px'
+                    }}
+                  >
+                    🔍 SEE followup changes
+                  </button>
+                </div>
+              )}
 
               {confirmState === 'confirmed' && (
                 <div style={{ fontSize: '12px', color: '#065f46', fontWeight: 500 }}>✅ Tender updated successfully.</div>
@@ -188,11 +230,11 @@ function FileResultMessage({ filename, results, message, confirmStates, onConfir
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploadComplete }) {
+export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploadComplete, mode = 'normal', setMode, tenders = [] }) {
   const [messages, setMessages] = useState([
     {
       id: 1,
-      text: "Hello! I'm your AI assistant. You can ask me questions about your tenders or <strong>upload a PDF document</strong> for structured data extraction.",
+      text: "Hello! I'm your AI assistant. You can ask me questions about your tenders or upload a PDF document for structured data extraction.",
       sender: 'bot',
       type: 'text',
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -202,12 +244,35 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
   const [isProcessing, setIsProcessing] = useState(false);
   // { [msgId]: { [resultIndex]: 'pending'|'loading'|'confirmed'|'rejected'|'error' } }
   const [confirmStates, setConfirmStates] = useState({});
+  const [viewingChanges, setViewingChanges] = useState(null);
+  const [activeTab, setActiveTab] = useState('table'); // 'table' | 'json'
   const fileInputRef = useRef(null);
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isProcessing]);
+
+  useEffect(() => {
+    if (isOpen && mode === 'followup' && tenderId) {
+      setMessages(prev => {
+        // Prevent duplicate follow-up prompts for the same session/opening
+        const hasFollowUpPrompt = prev.some(m => m.isFollowUpPrompt && m.tenderId === tenderId);
+        if (hasFollowUpPrompt) return prev;
+
+        return [...prev, {
+          id: `followup-${Date.now()}`,
+          isFollowUpPrompt: true,
+          tenderId,
+          text: `Add a follow-up file for tender context **${tenderId}**:`,
+          sender: 'bot',
+          type: 'followup-request',
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        }];
+      });
+      if (setMode) setMode('normal');
+    }
+  }, [isOpen, mode, tenderId, setMode]);
 
   const addMessage = (payload, sender) => {
     setMessages(prev => [...prev, {
@@ -294,7 +359,29 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
           onConfirm={(idx, tenderId, patch, changedFields) =>
             handleConfirmUpdate(msg.id, idx, tenderId, patch, changedFields)}
           onReject={(idx) => handleRejectUpdate(msg.id, idx)}
+          onViewChanges={(r) => setViewingChanges(r)}
         />
+      );
+    }
+    if (msg.type === 'followup-request') {
+      return (
+        <div>
+          <MarkdownText text={msg.text} />
+          <div style={{ marginTop: '10px' }}>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="btn btn-primary btn-sm"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="17 8 12 3 7 8"></polyline>
+                <line x1="12" y1="3" x2="12" y2="15"></line>
+              </svg>
+              Upload Follow-up File
+            </button>
+          </div>
+        </div>
       );
     }
     return <MarkdownText text={msg.text} />;
@@ -373,6 +460,141 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
         </div>
       </div>
       <div className="drawer-overlay" onClick={onClose} />
+
+      {viewingChanges && (() => {
+        const existingTender = tenders?.find(t => t.id === viewingChanges.tenderId);
+        return (
+          <div className="modal-overlay" style={{ zIndex: 110 }}>
+            <div className="modal-content" style={{ maxWidth: '650px', width: '95vw' }}>
+              <div className="modal-header">
+                <h3>Follow-up Changes — {viewingChanges.tenderNo || viewingChanges.tenderId}</h3>
+                <button onClick={() => setViewingChanges(null)} className="btn btn-ghost" style={{ padding: '4px 8px' }}>✕</button>
+              </div>
+              <div className="modal-body" style={{ padding: '20px', minHeight: '320px', display: 'flex', flexDirection: 'column' }}>
+                {/* Tab Navigation */}
+                <div style={{ display: 'flex', borderBottom: '1px solid var(--border-color)', marginBottom: '16px' }}>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('table')}
+                    style={{
+                      padding: '8px 16px',
+                      border: 'none',
+                      background: 'none',
+                      borderBottom: activeTab === 'table' ? '2px solid var(--primary)' : 'none',
+                      color: activeTab === 'table' ? 'var(--primary)' : 'var(--text-muted)',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      fontSize: '13px',
+                    }}
+                  >
+                    📋 Database Table (Tenders)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('json')}
+                    style={{
+                      padding: '8px 16px',
+                      border: 'none',
+                      background: 'none',
+                      borderBottom: activeTab === 'json' ? '2px solid var(--primary)' : 'none',
+                      color: activeTab === 'json' ? 'var(--primary)' : 'var(--text-muted)',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      fontSize: '13px',
+                    }}
+                  >
+                    {"{ }"} Whole JSON File
+                  </button>
+                </div>
+
+                {activeTab === 'table' && (
+                  <div style={{ flex: 1 }}>
+                    <p style={{ margin: '0 0 12px 0', fontSize: '13px', color: 'var(--text-muted)' }}>
+                      Comparing current database values against the follow-up PDF values:
+                    </p>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                      <thead>
+                        <tr style={{ borderBottom: '2px solid var(--border-color)', textAlign: 'left', backgroundColor: 'var(--bg-page)' }}>
+                          <th style={{ padding: '10px 8px', fontWeight: 600 }}>Field Column</th>
+                          <th style={{ padding: '10px 8px', fontWeight: 600 }}>Current DB Value</th>
+                          <th style={{ padding: '10px 8px', fontWeight: 600 }}>Extracted PDF Value</th>
+                          <th style={{ padding: '10px 8px', fontWeight: 600, textAlign: 'center' }}>Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[
+                          { label: 'Tender No', dbVal: existingTender?.tenderNo, extVal: viewingChanges.extractedValues?.tenderNo },
+                          { label: 'Title',     dbVal: existingTender?.title,    extVal: viewingChanges.extractedValues?.title },
+                          { label: 'Budget',    dbVal: existingTender?.details?.budget,   extVal: viewingChanges.extractedValues?.budget },
+                          { label: 'Deadline',  dbVal: existingTender?.details?.deadline, extVal: viewingChanges.extractedValues?.deadline },
+                          { label: 'Location',  dbVal: existingTender?.details?.location, extVal: viewingChanges.extractedValues?.location },
+                        ].map((item, idx) => {
+                          const dbStr = (item.dbVal === null || item.dbVal === undefined) ? '' : String(item.dbVal).trim();
+                          const extStr = (item.extVal === null || item.extVal === undefined) ? '' : String(item.extVal).trim();
+                          const isChanged = dbStr !== extStr;
+
+                          return (
+                            <tr key={idx} style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: isChanged ? 'rgba(251, 191, 36, 0.05)' : 'transparent' }}>
+                              <td style={{ padding: '10px 8px', fontWeight: 600 }}>{item.label}</td>
+                              <td style={{ padding: '10px 8px', color: 'var(--text-main)', wordBreak: 'break-word' }}>{item.dbVal || '—'}</td>
+                              <td style={{ padding: '10px 8px', color: isChanged ? 'var(--success)' : 'var(--text-main)', fontWeight: isChanged ? 600 : 400, wordBreak: 'break-word' }}>{item.extVal || '—'}</td>
+                              <td style={{ padding: '10px 8px', textAlign: 'center' }}>
+                                {isChanged ? (
+                                  <span style={{
+                                    display: 'inline-block', padding: '2px 8px', borderRadius: '4px',
+                                    fontSize: '11px', fontWeight: 600, background: '#fef3c7', color: '#b45309', border: '1px solid #fcd34d'
+                                  }}>
+                                    Modified
+                                  </span>
+                                ) : (
+                                  <span style={{
+                                    display: 'inline-block', padding: '2px 8px', borderRadius: '4px',
+                                    fontSize: '11px', fontWeight: 500, background: '#f3f4f6', color: '#6b7280', border: '1px solid #e5e7eb'
+                                  }}>
+                                    Unchanged
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {activeTab === 'json' && (
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                    <p style={{ margin: '0 0 12px 0', fontSize: '13px', color: 'var(--text-muted)' }}>
+                      Complete raw JSON payload extracted from the follow-up file by the Python AI Service:
+                    </p>
+                    <pre style={{
+                      backgroundColor: '#1e1e1e',
+                      color: '#d4d4d4',
+                      padding: '16px',
+                      borderRadius: '8px',
+                      overflow: 'auto',
+                      maxHeight: '320px',
+                      fontSize: '12px',
+                      fontFamily: 'Consolas, Monaco, monospace',
+                      textAlign: 'left',
+                      margin: 0,
+                      flex: 1
+                    }}>
+                      {JSON.stringify(viewingChanges.rawJson, null, 2)}
+                    </pre>
+                  </div>
+                )}
+              </div>
+              <div className="modal-footer" style={{ padding: '12px 20px' }}>
+                <button onClick={() => setViewingChanges(null)} className="btn btn-primary">
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </>
   );
 }

@@ -451,6 +451,7 @@ module.exports = cds.service.impl(async function (srv) {
 
         // Show all extracted fields (existing vs new) so user can decide
         const allFields = [
+          { field: 'Tender No', dbKey: 'tenderNo', newVal: extractedTenderNo },
           { field: 'Title',    dbKey: 'title',    newVal: extractedTitle },
           { field: 'Budget',   dbKey: 'budget',   newVal: extractedBudget },
           { field: 'Deadline', dbKey: 'deadline', newVal: extractedDeadline },
@@ -459,7 +460,10 @@ module.exports = cds.service.impl(async function (srv) {
 
         pendingPatch = { lastChangedBy: uploadedBy };
         for (const { field, dbKey, newVal } of allFields) {
-          if (newVal) {
+          const dbValNormalized = (existingTender[dbKey] === null || existingTender[dbKey] === undefined) ? '' : String(existingTender[dbKey]).trim();
+          const newValNormalized = (newVal === null || newVal === undefined) ? '' : String(newVal).trim();
+          
+          if (newVal && dbValNormalized !== newValNormalized) {
             changedFields.push({ field, oldVal: existingTender[dbKey] || '—', newVal });
             pendingPatch[dbKey] = newVal;
           }
@@ -515,6 +519,14 @@ module.exports = cds.service.impl(async function (srv) {
         changedFields,
         requiresConfirmation,
         pendingPatch:         requiresConfirmation ? pendingPatch : null,
+        rawJson:              aiTender,
+        extractedValues: {
+          tenderNo:           extractedTenderNo || '',
+          title:              extractedTitle || '',
+          budget:             extractedBudget || '',
+          deadline:           extractedDeadline || '',
+          location:           extractedLocation || '',
+        }
       });
     }
 

@@ -411,10 +411,13 @@ module.exports = cds.service.impl(async function (srv) {
       // Save document (linked later once we know tender ID)
       const docId = cds.utils.uuid();
 
-      // Check for existing tender by tenderNo
+      // Check for existing tender: first by tenderNo, then by the tenderId passed from UI
       let existingTender = null;
       if (extractedTenderNo) {
         existingTender = await SELECT.one.from(Tenders).where({ tenderNo: extractedTenderNo });
+      }
+      if (!existingTender && tenderId) {
+        existingTender = await SELECT.one.from(Tenders).where({ ID: tenderId });
       }
 
       let resultTenderId;
@@ -423,9 +426,9 @@ module.exports = cds.service.impl(async function (srv) {
       let pendingPatch = null;
 
       if (!existingTender) {
-        // ── Branch A: new tender ─────────────────────────────────────────────
+        // ── Branch A: genuinely new tender (no match by tenderNo OR passed ID) ─
         isNew = true;
-        resultTenderId = tenderId || await getNextTenderId();
+        resultTenderId = await getNextTenderId();
 
         await INSERT.into(Tenders).entries({
           ID:            resultTenderId,
@@ -484,17 +487,24 @@ module.exports = cds.service.impl(async function (srv) {
         }
       }
 
-      // Save AIResult linked to document (with PDF bytes if available)
+      // Save AIResult linked to document (pdfContent saved separately — column may not be deployed yet)
+      const aiResultId = cds.utils.uuid();
       await INSERT.into(AIResults).entries({
-        ID:             cds.utils.uuid(),
-        document_ID:    docId,
+        ID:              aiResultId,
+        document_ID:     docId,
         confidenceScore: String(aiTender.confidenceScore || 'high'),
-        summary:        aiTender.summary || '',
-        keyTerms:       JSON.stringify(aiTender.keyTerms || []),
-        rawResponse:    JSON.stringify({ sections }),
-        pdfContent:     pdfBuffer || null,
-        processedAt:    new Date().toISOString(),
+        summary:         aiTender.summary || '',
+        keyTerms:        JSON.stringify(aiTender.keyTerms || []),
+        rawResponse:     JSON.stringify({ sections }),
+        processedAt:     new Date().toISOString(),
       });
+      if (pdfBuffer) {
+        try {
+          await UPDATE(AIResults).set({ pdfContent: pdfBuffer }).where({ ID: aiResultId });
+        } catch (pdfSaveErr) {
+          console.warn('[TenderService] Could not cache PDF in HANA (pdfContent column may not be deployed yet):', pdfSaveErr.message);
+        }
+      }
 
       const requiresConfirmation = !isNew;
       results.push({
@@ -605,7 +615,7 @@ module.exports = cds.service.impl(async function (srv) {
     // 1. Find the most recent AIResult that has sections for this tender
     const docs = await SELECT.from(Documents)
       .where({ tender_ID: tenderId })
-      .orderBy({ uploadedAt: 'desc' });
+      .orderBy('uploadedAt desc');
 
     let aiResult = null;
     for (const doc of docs) {

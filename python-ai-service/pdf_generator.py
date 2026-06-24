@@ -27,7 +27,6 @@ from reportlab.platypus import (
     Spacer,
     Table,
     TableStyle,
-    HRFlowable,
 )
 
 # Characters outside WinAnsiEncoding that appear in tender data — replace before
@@ -308,14 +307,33 @@ def _build_section_table(sub_headings: list, styles, page_w: float,
                     _build_section_table(nested, styles, page_w, depth=depth + 1)
                 )
         else:
-            cell_content = _safe(content).replace("\n", "<br/>") if content else "—"
-            rows.append([
-                Paragraph(_safe(label), styles["CellLabel"]),
-                Paragraph(cell_content, styles["CellValue"]),
-            ])
+            if not content:
+                continue  # Skip rows with no extracted content
+            # Long content can't fit in a table cell — a single row taller than
+            # the page frame causes ReportLab to crash. Render as label + paragraph.
+            if len(content) > 600:
+                if rows:
+                    data_rows = rows[1:] if col_headers else rows
+                    if data_rows:
+                        flowables.extend(_emit_table(rows, page_w, depth, bool(col_headers)))
+                    rows = ([
+                        [Paragraph(col_headers[0], styles["ColHeader"]),
+                         Paragraph(col_headers[1], styles["ColHeader"])]
+                    ] if col_headers else [])
+                flowables.append(Paragraph(f"<b>{_safe(label)}</b>", styles["SubLabel"]))
+                flowables.append(Paragraph(_safe(content).replace("\n", "<br/>"), styles["BodyPara"]))
+            else:
+                cell_content = _safe(content).replace("\n", "<br/>")
+                rows.append([
+                    Paragraph(_safe(label), styles["CellLabel"]),
+                    Paragraph(cell_content, styles["CellValue"]),
+                ])
 
     if rows:
-        flowables.extend(_emit_table(rows, page_w, depth, bool(col_headers)))
+        # Don't emit a header-only table (all data rows were skipped as empty)
+        data_rows = rows[1:] if col_headers else rows
+        if data_rows:
+            flowables.extend(_emit_table(rows, page_w, depth, bool(col_headers)))
 
     return flowables
 
@@ -384,28 +402,34 @@ def generate_tender_pdf(sections: list, doc_title: str = "Tender Synopsis") -> b
 
     story = _build_title_block(sections, styles, page_w)
 
-    for sec_num, section in enumerate(sections, start=1):
+    display_num = 0
+    for section in sections:
         heading = section.get("heading", "")
         content = (section.get("content") or "").strip()
         subs    = section.get("sub_headings") or []
 
         label = _section_label(heading)
-        story.append(Paragraph(f"{sec_num}. {_safe(label)}", styles["SectionHeading"]))
 
+        # Build body first — only add heading if body has actual content
+        body = []
         if heading in _BULLET_SECTIONS:
             if content:
-                story.append(Paragraph(_safe(content).replace("\n", "<br/>"), styles["BodyPara"]))
-            story.extend(_build_bullet_list("", subs, styles))
+                body.append(Paragraph(_safe(content).replace("\n", "<br/>"), styles["BodyPara"]))
+            body.extend(_build_bullet_list("", subs, styles))
 
         elif heading in _PLAIN_SECTIONS or not subs:
-            story.extend(_build_plain_text(content, subs, styles))
+            body.extend(_build_plain_text(content, subs, styles))
 
         else:
-            # Render section content paragraph first (e.g. scope_of_work summary)
             if content:
-                story.append(Paragraph(_safe(content).replace("\n", "<br/>"), styles["BodyPara"]))
+                body.append(Paragraph(_safe(content).replace("\n", "<br/>"), styles["BodyPara"]))
             hdrs = _col_headers(heading)
-            story.extend(_build_section_table(subs, styles, page_w, hdrs))
+            body.extend(_build_section_table(subs, styles, page_w, hdrs))
+
+        if body:
+            display_num += 1
+            story.append(Paragraph(f"{display_num}. {_safe(label)}", styles["SectionHeading"]))
+            story.extend(body)
 
     doc.build(story)
     return buf.getvalue()

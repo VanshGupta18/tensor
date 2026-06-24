@@ -18,6 +18,13 @@ const upload = multer({
   limits:  { fileSize: 50 * 1024 * 1024 },   // 50 MB
 });
 
+// Extend server socket timeout so long AI-processing uploads don't get dropped
+cds.on('listening', ({ server }) => {
+  server.timeout         = 600000;  // 10 min — max time a socket can be idle
+  server.keepAliveTimeout = 600000;
+  server.headersTimeout  = 610000;  // must be > keepAliveTimeout
+});
+
 cds.on('bootstrap', (app) => {
   app.post('/upload', upload.single('invoice'), async (req, res) => {
     if (!req.file) {

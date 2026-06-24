@@ -17,6 +17,8 @@ React → CAP (Node.js) → this service.
 
 import os
 import json
+import uuid
+import shutil
 from io import BytesIO
 from pathlib import Path
 
@@ -102,9 +104,12 @@ def process_file():
     if not file.filename:
         return jsonify({"error": "Empty filename"}), 400
 
-    # 1 + 2. Save uploaded PDF
-    file_path = UPLOAD_DIR / file.filename
+    # 1 + 2. Save uploaded PDF with a unique prefix to prevent filename collisions
+    # between concurrent uploads of identically-named files.
+    safe_filename = f"{uuid.uuid4().hex[:8]}_{file.filename}"
+    file_path = UPLOAD_DIR / safe_filename
     file.save(str(file_path))
+    split_dir = file_path.parent / (file_path.stem + "_split")
 
     # 3. Split — 50 pages for text PDFs, 20 for image PDFs (vision API page limit)
     pages_per_chunk = 20 if not _has_text(str(file_path)) else 50
@@ -112,13 +117,22 @@ def process_file():
 
     # 4. Send each chunk to AI and accumulate structured extraction
     try:
-        summary_json_str = generate_summary(token, API_URL, file_path_list)
-    except Exception as e:
-        if "401" in str(e) or "Unauthorized" in str(e):
-            token = fetch_token()
+        try:
             summary_json_str = generate_summary(token, API_URL, file_path_list)
-        else:
-            raise
+        except Exception as e:
+            if "401" in str(e) or "Unauthorized" in str(e):
+                token = fetch_token()
+                summary_json_str = generate_summary(token, API_URL, file_path_list)
+            else:
+                raise
+    finally:
+        # Clean up the original upload and all split chunks regardless of outcome
+        try:
+            file_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        if split_dir.exists():
+            shutil.rmtree(str(split_dir), ignore_errors=True)
 
     summary_dict = parse_ai_json(summary_json_str)
 
@@ -167,12 +181,17 @@ def process_file():
     if not raw_tenders:
         return jsonify({"tenders": [], "message": "No tender information found in the document"})
 
-    # Inject long-form fields back into each tender's sections
+    # Inject long-form fields back into each tender's sections.
+    # Long fields are merged across ALL chunks into a single flat value, so they
+    # cannot be reliably attributed to individual tenders in a multi-tender document.
+    # Inject only when there is a single tender to avoid cross-contaminating data.
     output_tenders = []
+    inject_long_fields = len(raw_tenders) == 1
     for tender_doc in raw_tenders:
-        for (section_name, heading), content in long_fields.items():
-            tender_doc, section = get_or_create_section(tender_doc, section_name)
-            tender_doc = add_subheading(tender_doc, section, heading, content)
+        if inject_long_fields:
+            for (section_name, heading), content in long_fields.items():
+                tender_doc, section = get_or_create_section(tender_doc, section_name)
+                tender_doc = add_subheading(tender_doc, section, heading, content)
 
         sections = tender_doc.get("sections", [])
         summary_text = tender_doc.get("document_title", "")

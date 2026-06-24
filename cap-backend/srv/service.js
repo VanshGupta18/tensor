@@ -29,195 +29,6 @@ module.exports = cds.service.impl(async function (srv) {
 
   const { Tenders, TenderAudits, Documents, AIResults, ChatHistories } = srv.entities;
 
-  // ── Seed initial data (SQLite / HANA) ──────────────────────────────────────
-  cds.on('served', async () => {
-    const any = await SELECT.one.from(Tenders);
-    if (!any) {
-
-      // ── 1. Seed Tenders ────────────────────────────────────────────────────
-      await INSERT.into(Tenders).rows([
-        {
-          ID: 'TND-001', tenderNo: 'MTL/MMRC/2026/T-01', version: 1,
-          title: 'Construction of Metro Line 4A – Elevated Corridor',
-          budget: '₹12,000 Crore', deadline: '2026-12-31', status: 'Draft',
-          location: 'Mumbai, Maharashtra', contractor: 'Not Selected',
-          createdBy: 'Alice', lastReviewedBy: '-', lastChangedBy: 'Alice'
-        },
-        {
-          ID: 'TND-002', tenderNo: 'SGPD/BER/2026/T-03', version: 3,
-          title: 'Smart Grids Power Distribution Upgrade – Zone 4',
-          budget: '€38,000,000', deadline: '2026-10-15', status: 'Reviewed',
-          location: 'Berlin, Germany', contractor: 'Siemens AG',
-          createdBy: 'David', lastReviewedBy: 'Emily', lastChangedBy: 'Emily'
-        },
-        {
-          ID: 'TND-003', tenderNo: 'WTF/AUS/2026/T-07', version: 2,
-          title: 'Waste Treatment Facility Upgrade – Phase 2',
-          budget: '$18,000,000', deadline: '2027-03-01', status: 'Approved',
-          location: 'Austin, Texas', contractor: 'GreenWaste Inc',
-          createdBy: 'Sarah', lastReviewedBy: 'Robert', lastChangedBy: 'Robert'
-        }
-      ]);
-
-      // ── 2. Seed Documents + AIResults with example JSON sections ───────────
-      const now = new Date().toISOString();
-
-      const seeds = [
-        {
-          tenderId: 'TND-001',
-          docId: 'doc-seed-001',
-          filename: 'metro-line-4a-tender.pdf',
-          sections: [
-            { heading: 'tender_information', sub_headings: [
-              { heading: 'tender_title', content: 'Construction of Metro Line 4A – Elevated Corridor' },
-              { heading: 'tender_no', content: 'MTL/MMRC/2026/T-01' },
-              { heading: 'issuing_authority', content: 'Mumbai Metro Rail Corporation Ltd. (MMRC)' },
-              { heading: 'tender_type', content: 'Works – EPC (Engineering, Procurement & Construction)' },
-              { heading: 'bid_type', content: 'Two-Envelope System' },
-              { heading: 'estimated_cost', content: '₹12,000 Crore (approx.)' },
-              { heading: 'funding_agency', content: 'Japan International Cooperation Agency (JICA)' },
-              { heading: 'tender_fee', content: '₹50,000 (non-refundable)' },
-              { heading: 'contact_details', sub_headings: [
-                { heading: 'name', content: 'Rajesh Kumar' },
-                { heading: 'designation', content: 'General Manager (Projects)' },
-                { heading: 'email', content: 'gm.projects@mmrc.co.in' },
-                { heading: 'mobile', content: '+91-22-26591000' }
-              ]}
-            ]},
-            { heading: 'key_dates', sub_headings: [
-              { heading: 'release_date', content: '01/06/2026' },
-              { heading: 'pre_bid_meeting', content: '15/06/2026 at 11:00 Hours (IST)' },
-              { heading: 'bid_submission_deadline', content: '31/12/2026 up to 17:00 Hours (IST)' },
-              { heading: 'technical_opening_date', content: '01/01/2027 at 11:00 Hours (IST)' }
-            ]},
-            { heading: 'scope_of_work', sub_headings: [
-              { heading: 'type', content: 'Elevated Metro Viaduct and Stations' },
-              { heading: 'location', content: 'Wadala to Kasarvadavali, Mumbai, Maharashtra' },
-              { heading: 'components', content: '17.8 km elevated viaduct; 13 stations; depot at Vikhroli; track laying and electrification; signalling and telecommunications systems' }
-            ]},
-            { heading: 'bid_security_financials', sub_headings: [
-              { heading: 'emd', content: '₹120 Crore (1% of estimated project cost) via Bank Guarantee' },
-              { heading: 'bid_validity', content: '180 days from the date of bid opening' },
-              { heading: 'performance_security', content: '5% of Contract Price, valid through Defects Liability Period' }
-            ]},
-            { heading: 'contract_conditions', sub_headings: [
-              { heading: 'completion_time', content: '48 months from the Effective Date of Contract' },
-              { heading: 'defect_liability_period', content: '24 months after completion' },
-              { heading: 'liquidated_damages', content: '0.05% of Contract Price per week of delay, subject to maximum 10% of Contract Price' }
-            ]}
-          ]
-        },
-        {
-          tenderId: 'TND-002',
-          docId: 'doc-seed-002',
-          filename: 'smart-grids-berlin-tender.pdf',
-          sections: [
-            { heading: 'tender_information', sub_headings: [
-              { heading: 'tender_title', content: 'Smart Grids Power Distribution Upgrade – Zone 4' },
-              { heading: 'tender_no', content: 'SGPD/BER/2026/T-03' },
-              { heading: 'issuing_authority', content: 'Berliner Stadtwerke GmbH' },
-              { heading: 'tender_type', content: 'Supply & Installation' },
-              { heading: 'bid_type', content: 'Open Competitive Bidding' },
-              { heading: 'estimated_cost', content: '€38,000,000' },
-              { heading: 'funding_agency', content: 'European Investment Bank (EIB)' },
-              { heading: 'contact_details', sub_headings: [
-                { heading: 'name', content: 'Hans Weber' },
-                { heading: 'designation', content: 'Head of Procurement' },
-                { heading: 'email', content: 'procurement@stadtwerke-berlin.de' }
-              ]}
-            ]},
-            { heading: 'key_dates', sub_headings: [
-              { heading: 'release_date', content: '05/04/2026' },
-              { heading: 'bid_submission_deadline', content: '15/10/2026 at 14:00 CET' },
-              { heading: 'technical_opening_date', content: '16/10/2026 at 10:00 CET' },
-              { heading: 'financial_opening_date', content: 'To be announced after technical evaluation' }
-            ]},
-            { heading: 'scope_of_work', sub_headings: [
-              { heading: 'type', content: 'Smart Grid Infrastructure Modernisation' },
-              { heading: 'location', content: 'Berlin Zone 4 – Mitte, Prenzlauer Berg, Friedrichshain' },
-              { heading: 'components', content: 'Advanced Metering Infrastructure (AMI) for 120,000 households; 42 smart substations; SCADA integration; fibre-optic communication backbone; demand response management system' }
-            ]},
-            { heading: 'bid_security_financials', sub_headings: [
-              { heading: 'emd', content: '€380,000 (1% of estimated contract value)' },
-              { heading: 'bid_validity', content: '150 days from submission deadline' },
-              { heading: 'performance_security', content: '10% of Contract Price' }
-            ]},
-            { heading: 'contract_conditions', sub_headings: [
-              { heading: 'completion_time', content: '30 months from Effective Date' },
-              { heading: 'defect_liability_period', content: '12 months after final acceptance' },
-              { heading: 'liquidated_damages', content: '0.1% of undelivered portion per week, capped at 8% of Contract Price' }
-            ]}
-          ]
-        },
-        {
-          tenderId: 'TND-003',
-          docId: 'doc-seed-003',
-          filename: 'waste-treatment-austin-tender.pdf',
-          sections: [
-            { heading: 'tender_information', sub_headings: [
-              { heading: 'tender_title', content: 'Waste Treatment Facility Upgrade – Phase 2' },
-              { heading: 'tender_no', content: 'WTF/AUS/2026/T-07' },
-              { heading: 'issuing_authority', content: 'City of Austin – Public Works Department' },
-              { heading: 'tender_type', content: 'Design-Build' },
-              { heading: 'bid_type', content: 'Request for Proposal (RFP)' },
-              { heading: 'estimated_cost', content: '$18,000,000' },
-              { heading: 'funding_agency', content: 'EPA Brownfields Grant + City Capital Budget' },
-              { heading: 'contact_details', sub_headings: [
-                { heading: 'name', content: 'Maria Santos' },
-                { heading: 'designation', content: 'Senior Procurement Officer' },
-                { heading: 'email', content: 'procurement@austintexas.gov' },
-                { heading: 'mobile', content: '+1-512-974-7890' }
-              ]}
-            ]},
-            { heading: 'key_dates', sub_headings: [
-              { heading: 'release_date', content: '10/01/2026' },
-              { heading: 'pre_bid_meeting', content: '25/01/2026 at 09:00 CST' },
-              { heading: 'bid_submission_deadline', content: '01/03/2027 at 17:00 CST' },
-              { heading: 'technical_opening_date', content: '02/03/2027 at 09:00 CST' }
-            ]},
-            { heading: 'scope_of_work', sub_headings: [
-              { heading: 'type', content: 'Wastewater Treatment Plant Upgrade and Expansion' },
-              { heading: 'location', content: 'South Austin Treatment Plant, 1017 Talmadge St, Austin TX 78702' },
-              { heading: 'components', content: 'Biological nutrient removal upgrade; new secondary clarifiers (×2); UV disinfection system replacement; SCADA modernisation; capacity expansion from 25 MGD to 40 MGD; sludge dewatering centrifuges' }
-            ]},
-            { heading: 'bid_security_financials', sub_headings: [
-              { heading: 'emd', content: '5% of bid amount via cashier\'s check or surety bond' },
-              { heading: 'bid_validity', content: '90 days from bid opening date' },
-              { heading: 'performance_security', content: '100% Performance Bond + 100% Payment Bond required' }
-            ]},
-            { heading: 'contract_conditions', sub_headings: [
-              { heading: 'completion_time', content: '36 months from Notice to Proceed' },
-              { heading: 'defect_liability_period', content: '18 months after substantial completion' },
-              { heading: 'liquidated_damages', content: '$2,500 per calendar day of delay' }
-            ]}
-          ]
-        }
-      ];
-
-      for (const seed of seeds) {
-        await INSERT.into(Documents).entries({
-          ID: seed.docId,
-          tender_ID: seed.tenderId,
-          filename: seed.filename,
-          mimeType: 'application/pdf',
-          uploadedBy: 'system',
-          uploadedAt: now,
-        });
-
-        await INSERT.into(AIResults).entries({
-          ID: `air-seed-${seed.tenderId.toLowerCase()}`,
-          document_ID: seed.docId,
-          confidenceScore: 'high',
-          summary: seed.sections[0]?.sub_headings?.[0]?.content || seed.tenderId,
-          keyTerms: JSON.stringify(seed.sections[0]?.sub_headings?.map(s => s.heading) || []),
-          rawResponse: JSON.stringify({ sections: seed.sections }),
-          processedAt: now,
-        });
-      }
-
-      console.log('[TenderService] Seeded initial tender data with AI sections.');
-    }
-  });
 
   // ── PATCH Tender: auto-increment version ────────────────────────────────────
   srv.before('UPDATE', Tenders, async (req) => {
@@ -242,8 +53,8 @@ module.exports = cds.service.impl(async function (srv) {
   // ── Action: login ────────────────────────────────────────────────────────────
   // Simple credential store — replace with XSUAA in production.
   const USERS = {
-    admin   : { password: 'admin123', role: 'admin' },
-    reviewer: { password: 'review123', role: 'reviewer' },
+    admin   : { password: process.env.ADMIN_PASSWORD    || 'admin123',   role: 'admin' },
+    reviewer: { password: process.env.REVIEWER_PASSWORD || 'review123', role: 'reviewer' },
   };
 
   srv.on('login', async (req) => {
@@ -283,6 +94,7 @@ module.exports = cds.service.impl(async function (srv) {
     const { tenderId, filename, content, mimeType } = req.data;
     const uploadedAt = new Date().toISOString();
     const uploadedBy = req.user?.id || 'unknown';
+    const contentBuffer = Buffer.isBuffer(content) ? content : Buffer.from(content, 'base64');
 
     // 1. Forward raw bytes to Python AI service
     let pyTenders = null;  // array from Python: [{ confidenceScore, summary, keyTerms, sections }]
@@ -293,14 +105,11 @@ module.exports = cds.service.impl(async function (srv) {
       try {
         const FormData = require('form-data');
         const form = new FormData();
-        const buffer = Buffer.isBuffer(content)
-          ? content
-          : Buffer.from(content, 'base64');
-        form.append('invoice', buffer, { filename, contentType: mimeType || 'application/octet-stream' });
+        form.append('invoice', contentBuffer, { filename, contentType: mimeType || 'application/octet-stream' });
 
         const pyRes = await axios.post(`${PYTHON_AI_URL}/process_file`, form, {
           headers: form.getHeaders(),
-          timeout: 300_000
+          timeout: 600_000
         });
         pyTenders = pyRes.data?.tenders || null;
       } catch (err) {
@@ -325,7 +134,7 @@ module.exports = cds.service.impl(async function (srv) {
       const docId = cds.utils.uuid();
       await INSERT.into(Documents).entries({
         ID: docId, tender_ID: tenderId || null, filename,
-        mimeType: mimeType || 'application/octet-stream', content, uploadedBy, uploadedAt
+        mimeType: mimeType || 'application/octet-stream', uploadedBy, uploadedAt
       });
       return JSON.stringify({
         results: [],
@@ -338,7 +147,7 @@ module.exports = cds.service.impl(async function (srv) {
       const docId = cds.utils.uuid();
       await INSERT.into(Documents).entries({
         ID: docId, tender_ID: tenderId || null, filename,
-        mimeType: mimeType || 'application/octet-stream', content, uploadedBy, uploadedAt
+        mimeType: mimeType || 'application/octet-stream', uploadedBy, uploadedAt
       });
       return JSON.stringify({ results: [], message: 'No tender information found in the document.' });
     }
@@ -428,22 +237,28 @@ module.exports = cds.service.impl(async function (srv) {
       if (!existingTender) {
         // ── Branch A: genuinely new tender (no match by tenderNo OR passed ID) ─
         isNew = true;
-        resultTenderId = await getNextTenderId();
-
-        await INSERT.into(Tenders).entries({
-          ID:            resultTenderId,
-          tenderNo:      extractedTenderNo || '',
-          version:       extractedVersion,
-          title:         extractedTitle,
-          budget:        extractedBudget  || 'TBD',
-          deadline:      extractedDeadline || null,
-          status:        'Draft',
-          location:      extractedLocation || '',
-          contractor:    'Not Selected',
-          createdBy:     uploadedBy,
-          lastReviewedBy: '-',
-          lastChangedBy:  uploadedBy,
-        });
+        for (let attempt = 0; attempt < 5; attempt++) {
+          resultTenderId = await getNextTenderId();
+          try {
+            await INSERT.into(Tenders).entries({
+              ID:            resultTenderId,
+              tenderNo:      extractedTenderNo || '',
+              version:       extractedVersion,
+              title:         extractedTitle,
+              budget:        extractedBudget  || 'TBD',
+              deadline:      extractedDeadline || null,
+              status:        'Draft',
+              location:      extractedLocation || '',
+              contractor:    'Not Selected',
+              createdBy:     uploadedBy,
+              lastReviewedBy: '-',
+              lastChangedBy:  uploadedBy,
+            });
+            break;
+          } catch (insertErr) {
+            if (attempt === 4) throw insertErr;
+          }
+        }
 
       } else {
         // ── Branch B: duplicate found — always ask user to confirm ────────────
@@ -470,7 +285,7 @@ module.exports = cds.service.impl(async function (srv) {
       // Save document linked to this tender
       await INSERT.into(Documents).entries({
         ID: docId, tender_ID: resultTenderId, filename,
-        mimeType: mimeType || 'application/octet-stream', content, uploadedBy, uploadedAt
+        mimeType: mimeType || 'application/octet-stream', uploadedBy, uploadedAt
       });
 
       // Generate PDF synopsis via Python and save alongside the JSON
@@ -526,13 +341,25 @@ module.exports = cds.service.impl(async function (srv) {
   // Called by React after the user confirms a duplicate-update prompt.
   srv.on('applyTenderUpdate', async (req) => {
     const { tenderId, patch, changedFields } = req.data;
-    const patchObj        = JSON.parse(patch);
-    const changedFieldsArr = JSON.parse(changedFields);
+
+    let patchObj, changedFieldsArr;
+    try {
+      patchObj         = JSON.parse(patch);
+      changedFieldsArr = JSON.parse(changedFields);
+    } catch (e) {
+      return req.error(400, `Invalid JSON: ${e.message}`);
+    }
+    if (!Array.isArray(changedFieldsArr)) return req.error(400, 'changedFields must be a JSON array');
+
+    const ALLOWED_PATCH_KEYS = ['title', 'budget', 'deadline', 'location', 'lastChangedBy'];
+    const safePatch = Object.fromEntries(
+      Object.entries(patchObj).filter(([k]) => ALLOWED_PATCH_KEYS.includes(k))
+    );
 
     const tender = await SELECT.one.from(Tenders).where({ ID: tenderId });
     if (!tender) return req.error(404, `Tender ${tenderId} not found`);
 
-    await UPDATE(Tenders).set(patchObj).where({ ID: tenderId });
+    await UPDATE(Tenders).set(safePatch).where({ ID: tenderId });
 
     for (const { field, oldVal, newVal } of changedFieldsArr) {
       await INSERT.into(TenderAudits).entries({
@@ -542,7 +369,7 @@ module.exports = cds.service.impl(async function (srv) {
         oldVal,
         newVal,
         remark:    'Updated from PDF upload (user confirmed)',
-        changedBy: patchObj.lastChangedBy || 'unknown',
+        changedBy: safePatch.lastChangedBy || 'unknown',
         changedAt: new Date().toISOString(),
       });
     }
@@ -569,7 +396,7 @@ module.exports = cds.service.impl(async function (srv) {
     await INSERT.into(ChatHistories).entries({
       ID: cds.utils.uuid(),
       tender_ID: tenderId || null,
-      sender: sender || 'user',
+      sender: 'user',
       message,
       timestamp
     });

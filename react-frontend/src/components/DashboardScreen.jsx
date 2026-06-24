@@ -43,7 +43,7 @@ export default function DashboardScreen({
           <h1>TenderFlow Dashboard</h1>
           <div className="nav-actions">
             <div className="user-badge">
-              <div className="user-avatar">{username.charAt(0).toUpperCase()}</div>
+              <div className="user-avatar">{username ? username.charAt(0).toUpperCase() : '?'}</div>
               {username}
             </div>
             <button onClick={onLogout} className="btn btn-ghost" style={{ color: 'var(--danger)' }}>

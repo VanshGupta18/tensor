@@ -14,6 +14,7 @@ Output: PDF bytes (ReportLab — no system dependencies).
 """
 
 import html
+import re
 from io import BytesIO
 
 from reportlab.lib import colors
@@ -262,6 +263,11 @@ def _emit_table(rows: list, page_w: float, depth: int, has_header: bool) -> list
     return [tbl, Spacer(1, 4)]
 
 
+def _is_list_like(text: str) -> bool:
+    """True if content looks like a comma/semicolon/newline-separated list."""
+    return text.count(",") >= 3 or text.count(";") >= 2 or text.count("\n") >= 2
+
+
 def _build_section_table(sub_headings: list, styles, page_w: float,
                          col_headers=None, depth: int = 0) -> list:
     """
@@ -309,25 +315,16 @@ def _build_section_table(sub_headings: list, styles, page_w: float,
         else:
             if not content:
                 continue  # Skip rows with no extracted content
-            # Long content can't fit in a table cell — a single row taller than
-            # the page frame causes ReportLab to crash. Render as label + paragraph.
-            if len(content) > 600:
-                if rows:
-                    data_rows = rows[1:] if col_headers else rows
-                    if data_rows:
-                        flowables.extend(_emit_table(rows, page_w, depth, bool(col_headers)))
-                    rows = ([
-                        [Paragraph(col_headers[0], styles["ColHeader"]),
-                         Paragraph(col_headers[1], styles["ColHeader"])]
-                    ] if col_headers else [])
-                flowables.append(Paragraph(f"<b>{_safe(label)}</b>", styles["SubLabel"]))
-                flowables.append(Paragraph(_safe(content).replace("\n", "<br/>"), styles["BodyPara"]))
+            # For list-like content, render as bullet items inside the Details cell
+            if _is_list_like(content):
+                items = [i.strip() for i in re.split(r"[,;\n]+", content) if i.strip()]
+                cell_content = "<br/>".join(f"• {_safe(i)}" for i in items)
             else:
                 cell_content = _safe(content).replace("\n", "<br/>")
-                rows.append([
-                    Paragraph(_safe(label), styles["CellLabel"]),
-                    Paragraph(cell_content, styles["CellValue"]),
-                ])
+            rows.append([
+                Paragraph(_safe(label), styles["CellLabel"]),
+                Paragraph(cell_content, styles["CellValue"]),
+            ])
 
     if rows:
         # Don't emit a header-only table (all data rows were skipped as empty)

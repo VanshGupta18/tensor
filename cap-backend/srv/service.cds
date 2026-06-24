@@ -18,10 +18,10 @@ service TenderService @(path: '/odata/v4/tender') {
     entity TenderAudits as projection on db.TenderAudits;
 
     // ── Documents ─────────────────────────────────
-    entity Documents   as projection on db.Documents;
+    entity Documents   as projection on db.Documents excluding { content };
 
     // ── AI Results ───────────────────────────────
-    entity AIResults   as projection on db.AIResults;
+    entity AIResults   as projection on db.AIResults excluding { pdfContent };
 
     // ── Chat History ─────────────────────────────
     entity ChatHistories as projection on db.ChatHistories;

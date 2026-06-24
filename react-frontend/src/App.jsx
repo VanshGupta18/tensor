@@ -21,7 +21,6 @@ function App() {
     loading,
     error,
     refresh,
-    handleMarkReviewed,
     handleSaveChanges,
   } = useTenders(user);
 
@@ -40,16 +39,14 @@ function App() {
   };
 
   // ── Navigation ──────────────────────────────────────────────────────────────
-  const handleShowDetails = async (tender) => {
-    const updated = await handleMarkReviewed(tender);
-    setSelectedTender(updated);
+  const handleShowDetails = (tender) => {
+    setSelectedTender(tender);
     setIsDetailsPreEditing(false);
     setScreen('details');
   };
 
-  const handleEditDetails = async (tender) => {
-    const updated = await handleMarkReviewed(tender);
-    setSelectedTender(updated);
+  const handleEditDetails = (tender) => {
+    setSelectedTender(tender);
     setIsDetailsPreEditing(true);
     setScreen('details');
   };
@@ -62,15 +59,17 @@ function App() {
 
   // ── Save changes ────────────────────────────────────────────────────────────
   const onSaveChanges = async (tenderId, updatedFormValues, changedList, remarksObject) => {
-    try {
-      const updated = await handleSaveChanges(tenderId, updatedFormValues, changedList, remarksObject);
-      setSelectedTender(updated);
-    } catch (err) {
-      console.error('Save failed:', err);
-    }
+    const updated = await handleSaveChanges(tenderId, updatedFormValues, changedList, remarksObject);
+    setSelectedTender(updated);
   };
 
-  const handleDownloadDetails = (tender) => downloadTender(tender);
+  const handleDownloadDetails = async (tender) => {
+    try {
+      await downloadTender(tender);
+    } catch (err) {
+      alert(err.message);
+    }
+  };
 
   const handleDelete = async (tender) => {
     const label = tender.tenderNo || tender.id;

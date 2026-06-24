@@ -130,7 +130,8 @@ export async function submitAuditBatch(tenderId, changedList, remarksObject, cha
  * Returns the raw OData value array — callers parse rawResponse as needed.
  */
 export async function getTenderDocuments(tenderId) {
-  const encoded = encodeURIComponent(`tender_ID eq '${tenderId}'`);
+  const escapedId = tenderId.replace(/'/g, "''");
+  const encoded = encodeURIComponent(`tender_ID eq '${escapedId}'`);
   const res = await api.get(`/Documents?$filter=${encoded}&$expand=aiResult&$orderby=uploadedAt desc`);
   return res.value || [];
 }

@@ -211,7 +211,7 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
 
   const addMessage = (payload, sender) => {
     setMessages(prev => [...prev, {
-      id: Date.now(),
+      id: crypto.randomUUID(),
       sender,
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       ...(typeof payload === 'string'
@@ -221,10 +221,10 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
   };
 
   // ── Duplicate-update confirmation handlers ───────────────────────────────────
-  const handleConfirmUpdate = async (msgId, resultIdx, tenderId, patch, changedFields) => {
+  const handleConfirmUpdate = async (msgId, resultIdx, resultTenderId, patch, changedFields) => {
     setConfirmStates(prev => ({ ...prev, [msgId]: { ...(prev[msgId] || {}), [resultIdx]: 'loading' } }));
     try {
-      await applyTenderUpdate(tenderId, patch, changedFields);
+      await applyTenderUpdate(resultTenderId, patch, changedFields);
       setConfirmStates(prev => ({ ...prev, [msgId]: { ...(prev[msgId] || {}), [resultIdx]: 'confirmed' } }));
       if (onUploadComplete) onUploadComplete();
     } catch (err) {
@@ -291,8 +291,8 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
           results={msg.results}
           message={msg.message}
           confirmStates={confirmStates[msg.id] || {}}
-          onConfirm={(idx, tenderId, patch, changedFields) =>
-            handleConfirmUpdate(msg.id, idx, tenderId, patch, changedFields)}
+          onConfirm={(idx, resultTenderId, patch, changedFields) =>
+            handleConfirmUpdate(msg.id, idx, resultTenderId, patch, changedFields)}
           onReject={(idx) => handleRejectUpdate(msg.id, idx)}
         />
       );

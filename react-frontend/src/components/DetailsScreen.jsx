@@ -130,8 +130,12 @@ export default function DetailsScreen({
   };
 
   const handleSaveFinal = async (remarksObject) => {
-    // Route ALL changes (field + AI) through onSaveChanges so audit entries are created for both
-    onSaveChanges(tender.id, { title, budget, deadline, status, location, contractor }, changedFields, remarksObject);
+    try {
+      await onSaveChanges(tender.id, { title, budget, deadline, status, location, contractor }, changedFields, remarksObject);
+    } catch (err) {
+      alert('Save failed: ' + err.message);
+      return;
+    }
 
     // Persist AI section data if any AI fields were changed
     if (hasAiInSave && aiResultId) {

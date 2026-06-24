@@ -16,12 +16,7 @@ export default function LoginScreen({ onLoginSuccess }) {
       const result = await login(username, password);
       onLoginSuccess(result.username || username);
     } catch (err) {
-      // Graceful fallback: if CAP is not running, allow known local credentials
-      if (username === 'admin' && password === 'admin123') {
-        onLoginSuccess(username);
-      } else {
-        setError(err.message || 'Invalid credentials');
-      }
+      setError(err.message || 'Invalid credentials');
     } finally {
       setLoading(false);
     }

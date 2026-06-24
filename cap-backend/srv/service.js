@@ -31,8 +31,8 @@ module.exports = cds.service.impl(async function (srv) {
 
   // ── Seed initial data (SQLite / HANA) ──────────────────────────────────────
   cds.on('served', async () => {
-    const count = await SELECT.one.from(Tenders).columns('count(*) as n');
-    if (count && Number(count.n) === 0) {
+    const any = await SELECT.one.from(Tenders);
+    if (!any) {
 
       // ── 1. Seed Tenders ────────────────────────────────────────────────────
       await INSERT.into(Tenders).rows([

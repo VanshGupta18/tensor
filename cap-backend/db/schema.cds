@@ -16,7 +16,8 @@ entity Users : cuid {
 // ─────────────────────────────────────────────────
 entity Tenders : managed {
     key ID             : String(20);       // e.g. "TND-001"
-        tenderNo       : String(200);      // extracted tender reference number, used for dedup
+        @assert.unique
+        tenderNo       : String(200);      // extracted tender reference number — unique index for dedup queries
         version        : Integer default 1;
         title          : String(500) not null;
         budget         : String(50);
@@ -27,6 +28,19 @@ entity Tenders : managed {
         createdBy      : String(100);
         lastReviewedBy : String(100);
         lastChangedBy  : String(100);
+        // AI-extracted fields (populated by processFile, read-only in UI)
+        issuingAuthority     : String(500);
+        contractType         : String(200);
+        bidSystem            : String(200);
+        fundingAgency        : String(500);
+        tenderFee            : String(100);
+        budgetCategory       : String(200);
+        publicationDate      : String(100);
+        preBidMeeting        : String(200);
+        bidSubmissionDeadline: String(200);
+        technicalOpening     : String(200);
+        financialOpening     : String(200);
+        workOrderIssuance    : String(200);
         // Associations
         audits         : Composition of many TenderAudits on audits.tender = $self;
         documents      : Composition of many Documents    on documents.tender = $self;
@@ -53,14 +67,14 @@ entity Documents : cuid {
     tender       : Association to Tenders;
     filename     : String(500);
     mimeType     : String(100);
-    content      : LargeBinary;            // raw file bytes stored in HANA
+    // content field removed — file bytes forwarded to Python then discarded, never persisted
     uploadedBy   : String(100);
     uploadedAt   : Timestamp;
     aiResult     : Composition of one AIResults on aiResult.document = $self;
 }
 
 // ─────────────────────────────────────────────────
-// AIResults  (output from Python FastAPI)
+// AIResults  (output from Python AI service)
 // ─────────────────────────────────────────────────
 entity AIResults : cuid {
     document        : Association to Documents;
@@ -68,7 +82,7 @@ entity AIResults : cuid {
     summary         : String(5000);
     keyTerms        : String(2000);         // JSON array stored as string
     rawResponse     : LargeString;          // full Python response JSON
-    pdfContent      : LargeBinary;          // generated PDF synopsis bytes
+    // pdfContent field removed — PDFs generated on demand from rawResponse, never persisted
     processedAt     : Timestamp;
 }
 
@@ -78,6 +92,6 @@ entity AIResults : cuid {
 entity ChatHistories : cuid {
     tender    : Association to Tenders;
     sender    : String(10);                 // 'user' | 'bot'
-    message   : LargeString;
+    message   : String(5000);              // inline storage — faster reads, cheaper than LOB
     timestamp : Timestamp;
 }

@@ -10,6 +10,8 @@ export default function DashboardScreen({
   onShowDetails,
   onOpenChat,
   onOpenFollowUp,
+  onPrefetchDocuments,
+  onDelete,
 }) {
   const [remarksTarget, setRemarksTarget] = useState(null); // null = closed, 'all' = global, tender obj = per-row
   const [searchQuery, setSearchQuery] = useState('');
@@ -17,9 +19,7 @@ export default function DashboardScreen({
   const filteredTenders = tenders.filter((t) => {
     if (!searchQuery) return true;
     const query = searchQuery.trim().toLowerCase();
-    const tNo = (t.tenderNo || '').toLowerCase();
-    const tId = (t.id || '').toLowerCase();
-    return tNo.includes(query) || tId.includes(query);
+    return (t.tenderNo || '').toLowerCase().includes(query);
   });
 
   const btnStyle = {
@@ -70,7 +70,7 @@ export default function DashboardScreen({
               <div className="search-bar-wrapper" style={{ position: 'relative', width: '240px' }}>
                 <input
                   type="text"
-                  placeholder="Search by tender ID..."
+                  placeholder="Search by tender No..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="search-input"
@@ -155,7 +155,7 @@ export default function DashboardScreen({
                 </svg>
                 Upload
               </button>
-              <button onClick={() => setRemarksTarget('all')} className="btn btn-secondary">
+              <button onClick={() => setRemarksTarget('all')} className="btn btn-primary">
                 All Remarks
               </button>
             </div>
@@ -163,8 +163,27 @@ export default function DashboardScreen({
 
           <div className="data-table-container" style={{ padding: '20px' }}>
             {loading && (
-              <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
-                Loading tenders from CAP backend…
+              <div style={{ overflowX: 'auto' }}>
+                <table className="data-table">
+                  <tbody>
+                    {Array.from({ length: 6 }).map((_, i) => (
+                      <tr key={i}>
+                        {[45, 30, 55, 28, 38, 35, 35, 70].map((w, j) => (
+                          <td key={j}>
+                            <div style={{
+                              height: '14px', borderRadius: '4px',
+                              background: 'linear-gradient(90deg, var(--bg-hover) 25%, #e9eaec 50%, var(--bg-hover) 75%)',
+                              backgroundSize: '400% 100%',
+                              animation: 'shimmer 1.4s ease infinite',
+                              animationDelay: `${(i * 8 + j) * 0.03}s`,
+                              width: `${w}%`,
+                            }} />
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )}
 
@@ -193,6 +212,7 @@ export default function DashboardScreen({
                     {filteredTenders.map((t) => (
                       <tr
                         key={t.id}
+                        onMouseEnter={() => onPrefetchDocuments?.(t.id)}
                         onClick={() => onShowDetails(t)}
                         style={{ cursor: 'pointer' }}
                         title="Click row to view details"
@@ -213,12 +233,39 @@ export default function DashboardScreen({
                             <button onClick={(e) => { e.stopPropagation(); onShowDetails(t); }} className="btn btn-secondary" style={btnStyle}>
                               Details
                             </button>
-                            <button onClick={(e) => { e.stopPropagation(); setRemarksTarget(t); }} className="btn btn-ghost" style={btnStyle}>
+                            <button onClick={(e) => { e.stopPropagation(); setRemarksTarget(t); }} className="btn btn-secondary" style={btnStyle}>
                               Remarks
                             </button>
                             <button onClick={(e) => { e.stopPropagation(); onOpenFollowUp(t); }} className="btn btn-secondary" style={btnStyle}>
                               Follow-up
                             </button>
+                            {onDelete && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); onDelete(t); }}
+                                title="Delete tender"
+                                style={{
+                                  ...btnStyle,
+                                  padding: '4px 7px',
+                                  color: 'var(--danger)',
+                                  background: 'transparent',
+                                  border: '1px solid transparent',
+                                  borderRadius: 'var(--radius-md)',
+                                  cursor: 'pointer',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  lineHeight: 1,
+                                }}
+                                onMouseEnter={e => { e.currentTarget.style.background = 'var(--danger-bg)'; e.currentTarget.style.borderColor = 'var(--danger)'; }}
+                                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'transparent'; }}
+                              >
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <polyline points="3 6 5 6 21 6" />
+                                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                                  <path d="M10 11v6M14 11v6" />
+                                  <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                                </svg>
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>

@@ -229,6 +229,87 @@ function FileResultMessage({ filename, results, message, confirmStates, onConfir
   );
 }
 
+// ── Upload processing stages (keyed by elapsed seconds) ──────────────────────
+const UPLOAD_STAGES = [
+  { minSec: 0,   label: 'Uploading document…',           detail: 'Sending file to server'                          },
+  { minSec: 4,   label: 'Splitting PDF into chunks…',    detail: 'Breaking into 50-page segments for parallel AI'  },
+  { minSec: 12,  label: 'Analysing document with AI…',   detail: 'Reading all pages in parallel — this takes ~90s' },
+  { minSec: 90,  label: 'Synthesising extracted data…',  detail: 'Deduplicating and cleaning results across chunks' },
+  { minSec: 115, label: 'Structuring final output…',     detail: 'Organising into sections and headings'           },
+  { minSec: 145, label: 'Finalising tender summary…',    detail: 'Almost there'                                    },
+];
+
+// ── AI thinking indicator shown during file upload ────────────────────────────
+function UploadThinkingMessage() {
+  const mountTime = useRef(Date.now());
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - mountTime.current) / 1000));
+    }, 500);
+    return () => clearInterval(id);
+  }, []);
+
+  const stage = UPLOAD_STAGES.reduce((cur, s) => elapsed >= s.minSec ? s : cur, UPLOAD_STAGES[0]);
+  const progress = Math.min((elapsed / 160) * 100, 96);
+  const remaining = Math.max(0, 160 - elapsed);
+  const mins = Math.floor(elapsed / 60);
+  const secs = elapsed % 60;
+  const elapsedStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+  const remainStr = remaining < 60 ? `~${remaining}s` : `~${Math.ceil(remaining / 60)}m`;
+
+  return (
+    <div style={{ minWidth: 240 }}>
+      {/* Stage label with spinner */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+        <svg
+          width="14" height="14" viewBox="0 0 24 24" fill="none"
+          stroke="var(--primary)" strokeWidth="2.5" strokeLinecap="round"
+          style={{ animation: 'spin 0.9s linear infinite', flexShrink: 0 }}
+        >
+          <circle cx="12" cy="12" r="10" stroke="var(--border-color)" />
+          <path d="M12 2a10 10 0 0 1 10 10" stroke="var(--primary)" />
+        </svg>
+        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-main)' }}>
+          {stage.label}
+        </span>
+      </div>
+
+      {/* Detail text */}
+      <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 10, paddingLeft: 22 }}>
+        {stage.detail}
+      </div>
+
+      {/* Progress bar */}
+      <div style={{ height: 3, background: 'var(--border-color)', borderRadius: 2, overflow: 'hidden', marginBottom: 6 }}>
+        <div style={{
+          height: '100%',
+          width: `${progress}%`,
+          background: 'var(--primary)',
+          borderRadius: 2,
+          transition: 'width 0.9s ease',
+          animation: progress >= 96 ? 'progress-pulse 1.2s ease-in-out infinite' : 'none',
+        }} />
+      </div>
+
+      {/* Time row */}
+      <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between' }}>
+        <span>{elapsedStr} elapsed</span>
+        {elapsed > 10 && remaining > 5 && <span>{remainStr} remaining</span>}
+      </div>
+    </div>
+  );
+}
+
+// ── Race a promise against a timeout so the panel never gets stuck ────────────
+function withTimeout(promise, ms, label) {
+  const timer = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error(`${label} timed out. Please try again.`)), ms)
+  );
+  return Promise.race([promise, timer]);
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploadComplete, mode = 'normal', setMode, tenders = [] }) {
   const [messages, setMessages] = useState([
@@ -242,6 +323,7 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
   ]);
   const [inputText, setInputText] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [processingType, setProcessingType] = useState(null); // 'chat' | 'upload'
   // { [msgId]: { [resultIndex]: 'pending'|'loading'|'confirmed'|'rejected'|'error' } }
   const [confirmStates, setConfirmStates] = useState({});
   const [viewingChanges, setViewingChanges] = useState(null);
@@ -251,7 +333,7 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isProcessing]);
+  }, [messages]);
 
   useEffect(() => {
     if (isOpen && mode === 'followup' && tenderId) {
@@ -264,7 +346,7 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
           id: `followup-${Date.now()}`,
           isFollowUpPrompt: true,
           tenderId,
-          text: `Add a follow-up file for tender context **${tenderId}**:`,
+          text: `Add a follow-up file for tender **${tenders.find(t => t.id === tenderId)?.tenderNo || tenderId}**:`,
           sender: 'bot',
           type: 'followup-request',
           time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -309,13 +391,15 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
     addMessage(userQuery, 'user');
     setInputText('');
     setIsProcessing(true);
+    setProcessingType('chat');
     try {
-      const reply = await sendChatMessage(userQuery, tenderId);
+      const reply = await withTimeout(sendChatMessage(userQuery, tenderId), 65_000, 'Chat request');
       addMessage(reply, 'bot');
     } catch (err) {
       addMessage(`⚠️ Could not reach AI service: ${err.message}`, 'bot');
     } finally {
       setIsProcessing(false);
+      setProcessingType(null);
     }
   };
 
@@ -325,8 +409,10 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
     if (!file) return;
     addMessage(`📎 Uploading **${file.name}** for AI extraction…`, 'user');
     setIsProcessing(true);
+    setProcessingType('upload');
     try {
-      const raw = await uploadFileForProcessing(file, tenderId);
+      // 5 min timeout — processing a 600-page PDF takes ~150-190s on the server
+      const raw = await withTimeout(uploadFileForProcessing(file, tenderId), 300_000, 'File upload');
       // raw is a JSON string from CAP action → parse it
       const result = typeof raw === 'string' ? JSON.parse(raw) : raw;
       addMessage({
@@ -343,6 +429,7 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
       addMessage(`⚠️ File upload failed: ${err.message}`, 'bot');
     } finally {
       setIsProcessing(false);
+      setProcessingType(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
@@ -396,7 +483,11 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
             </svg>
             Copilot
-            {tenderId && <span style={{ fontSize: '12px', opacity: 0.7, marginLeft: '8px' }}>• {tenderId}</span>}
+            {tenderId && (
+              <span style={{ fontSize: '12px', opacity: 0.7, marginLeft: '8px' }}>
+                • {tenders.find(t => t.id === tenderId)?.tenderNo || tenderId}
+              </span>
+            )}
           </h3>
           <button onClick={onClose} className="btn btn-ghost" style={{ padding: '4px 8px' }}>✕</button>
         </div>
@@ -410,11 +501,15 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
           ))}
           {isProcessing && (
             <div className="chat-msg bot">
-              <div style={{ display: 'flex', gap: '4px', alignItems: 'center', padding: '4px 0' }}>
-                <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'currentColor', animation: 'pulse 1s infinite' }} />
-                <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'currentColor', animation: 'pulse 1s infinite 0.2s' }} />
-                <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'currentColor', animation: 'pulse 1s infinite 0.4s' }} />
-              </div>
+              {processingType === 'upload' ? (
+                <UploadThinkingMessage />
+              ) : (
+                <div style={{ display: 'flex', gap: '4px', alignItems: 'center', padding: '4px 0' }}>
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'currentColor', animation: 'pulse 1s infinite' }} />
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'currentColor', animation: 'pulse 1s infinite 0.2s' }} />
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'currentColor', animation: 'pulse 1s infinite 0.4s' }} />
+                </div>
+              )}
             </div>
           )}
           <div ref={messagesEndRef} />
@@ -467,7 +562,7 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
           <div className="modal-overlay" style={{ zIndex: 110 }}>
             <div className="modal-content" style={{ maxWidth: '650px', width: '95vw' }}>
               <div className="modal-header">
-                <h3>Follow-up Changes — {viewingChanges.tenderNo || viewingChanges.tenderId}</h3>
+                <h3>Follow-up Changes — {viewingChanges.tenderNo || tenders.find(t => t.id === viewingChanges.tenderId)?.tenderNo || viewingChanges.tenderId}</h3>
                 <button onClick={() => setViewingChanges(null)} className="btn btn-ghost" style={{ padding: '4px 8px' }}>✕</button>
               </div>
               <div className="modal-body" style={{ padding: '20px', minHeight: '320px', display: 'flex', flexDirection: 'column' }}>

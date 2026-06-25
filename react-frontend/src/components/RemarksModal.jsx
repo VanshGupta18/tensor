@@ -7,14 +7,14 @@ export default function RemarksModal({ tenders, filterTenderId, onClose }) {
     if (t.remarks) {
       t.remarks.forEach(r => {
         if (r.fieldName !== 'Initial Setup') {
-          allRemarks.push({ tenderNo: t.tenderNo || t.id, ...r });
+          allRemarks.push({ tenderNo: t.tenderNo || '—', ...r });
         }
       });
     }
   });
 
   const filterTenderNo = filterTenderId
-    ? (tenders.find(t => t.id === filterTenderId)?.tenderNo || filterTenderId)
+    ? (tenders.find(t => t.id === filterTenderId)?.tenderNo || '—')
     : null;
 
   const title = filterTenderNo

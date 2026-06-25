@@ -19,6 +19,8 @@ import os
 import json
 import uuid
 import shutil
+import threading
+import time
 from io import BytesIO
 from pathlib import Path
 
@@ -29,11 +31,8 @@ from dotenv import load_dotenv
 from functions import (
     get_access_token,
     split_pdf,
-    generate_summary,
-    parse_ai_json,
-    generate_result,
-    get_or_create_section,
-    add_subheading,
+    extract_facts_from_chunks,
+    synthesize_final_json,
     generate_chat_response,
     _has_text,
 )
@@ -55,11 +54,24 @@ CREDENTIALS = {
 UPLOAD_DIR = Path(__file__).parent / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
-# ── Token (fetched once at startup; refresh on 401) ────────────────────────────
-def fetch_token():
-    return get_access_token(CREDENTIALS)
+# ── Token — proactive refresh with a lock ─────────────────────────────────────
+# SAP AI Core tokens typically expire after 60 min. We treat them as valid for
+# 55 min and refresh proactively 60 s before expiry so no request ever hits a
+# stale token. A lock ensures only one thread refreshes at a time.
+_token_lock      = threading.Lock()
+_token_value: str = ""
+_token_expires_at: float = 0.0
 
-token = fetch_token()
+def get_token() -> str:
+    global _token_value, _token_expires_at
+    with _token_lock:
+        if time.time() >= (_token_expires_at - 60):
+            _token_value      = get_access_token(CREDENTIALS)
+            _token_expires_at = time.time() + 55 * 60
+        return _token_value
+
+# Fetch on startup
+get_token()
 
 # ── Flask app ──────────────────────────────────────────────────────────────────
 app = Flask(__name__)
@@ -95,8 +107,6 @@ def health():
 # ──────────────────────────────────────────────────────────────────────────────
 @app.route("/process_file", methods=["POST"])
 def process_file():
-    global token
-
     if "invoice" not in request.files:
         return jsonify({"error": "No file uploaded. Expected field name: 'invoice'"}), 400
 
@@ -115,16 +125,9 @@ def process_file():
     pages_per_chunk = 20 if not _has_text(str(file_path)) else 50
     file_path_list = split_pdf(str(file_path), pages_per_chunk)
 
-    # 4. Send each chunk to AI and accumulate structured extraction
     try:
-        try:
-            summary_json_str = generate_summary(token, API_URL, file_path_list)
-        except Exception as e:
-            if "401" in str(e) or "Unauthorized" in str(e):
-                token = fetch_token()
-                summary_json_str = generate_summary(token, API_URL, file_path_list)
-            else:
-                raise
+        raw_facts = extract_facts_from_chunks(get_token(), API_URL, file_path_list)
+        final_json = synthesize_final_json(get_token(), API_URL, raw_facts)
     finally:
         # Clean up the original upload and all split chunks regardless of outcome
         try:
@@ -134,84 +137,20 @@ def process_file():
         if split_dir.exists():
             shutil.rmtree(str(split_dir), ignore_errors=True)
 
-    summary_dict = parse_ai_json(summary_json_str)
-
-    # Extract long-form text fields before the second AI pass
-    # (these are injected back after to preserve full content)
-    long_fields = {
-        ("scope_of_work",           "components"):         summary_dict.get("scope_of_work", {}).get("components", ""),
-        ("eligibility_criteria",    "technical"):          summary_dict.get("eligibility_criteria", {}).get("technical", ""),
-        ("eligibility_criteria",    "financial"):          summary_dict.get("eligibility_criteria", {}).get("financial", ""),
-        ("eligibility_criteria",    "other_conditions"):   summary_dict.get("eligibility_criteria", {}).get("other_conditions", ""),
-        ("price_variation",         "materials"):          summary_dict.get("price_variation", {}).get("materials", ""),
-        ("contract_conditions",     "other_conditions"):   summary_dict.get("contract_conditions", {}).get("other_conditions", ""),
-        ("technical_bid_documents", "required_documents"): summary_dict.get("technical_bid_documents", {}).get("required_documents", ""),
-        ("technical_bid_documents", "declarations"):       summary_dict.get("technical_bid_documents", {}).get("declarations", ""),
-        ("technical_bid_documents", "other_requirements"): summary_dict.get("technical_bid_documents", {}).get("other_requirements", ""),
-    }
-
-    # Clear them so the second prompt stays compact
-    for (section, field) in long_fields:
-        if section in summary_dict and field in summary_dict[section]:
-            summary_dict[section][field] = ""
-
-    compact_summary = json.dumps(summary_dict, indent=2, ensure_ascii=False)
-
-    # 5. Second AI pass: transform flat JSON → hierarchical document structure
-    try:
-        result_raw = generate_result(token, API_URL, compact_summary)
-    except Exception as e:
-        if "401" in str(e) or "Unauthorized" in str(e):
-            token = fetch_token()
-            result_raw = generate_result(token, API_URL, compact_summary)
-        else:
-            raise
-
-    result_dict = parse_ai_json(result_raw)
-
-    # result_dict should now be { "tenders": [...] }
-    # Fall back gracefully if the AI returned the old single-document format
-    if "tenders" not in result_dict:
-        # Wrap old-format single document into the new array shape
-        result_dict = {"tenders": [result_dict]}
-
-    raw_tenders = result_dict.get("tenders", [])
+    raw_tenders = final_json.get("tenders", [])
 
     # Handle empty tenders (no tender info found in PDF)
     if not raw_tenders:
         return jsonify({"tenders": [], "message": "No tender information found in the document"})
 
-    # Inject long-form fields back into each tender's sections.
-    # Long fields are merged across ALL chunks into a single flat value, so they
-    # cannot be reliably attributed to individual tenders in a multi-tender document.
-    # Inject only when there is a single tender to avoid cross-contaminating data.
     output_tenders = []
-    inject_long_fields = len(raw_tenders) == 1
     for tender_doc in raw_tenders:
-        if inject_long_fields:
-            for (section_name, heading), content in long_fields.items():
-                tender_doc, section = get_or_create_section(tender_doc, section_name)
-                tender_doc = add_subheading(tender_doc, section, heading, content)
-
-        sections = tender_doc.get("sections", [])
-        summary_text = tender_doc.get("document_title", "")
-        key_terms = []
-
-        tender_info_section = next(
-            (s for s in sections if s.get("heading") == "tender_information"), None
-        )
-        if tender_info_section:
-            sub_headings = tender_info_section.get("sub_headings", [])
-            if not summary_text:
-                title_sh = next((h for h in sub_headings if h.get("heading") == "tender_title"), None)
-                summary_text = title_sh.get("content", "") if title_sh else ""
-            key_terms = [h.get("heading") for h in sub_headings if h.get("heading")]
-
+        title = tender_doc.get("tender_information", {}).get("title", "")
         output_tenders.append({
             "confidenceScore": "high",
-            "summary":         summary_text or "Tender document processed",
-            "keyTerms":        key_terms,
-            "sections":        sections,
+            "summary":         title or "Tender document processed",
+            "keyTerms":        ["tender_information", "key_dates", "scope_of_work", "eligibility_and_qualification", "security_and_financials", "payment_terms", "price_variation", "contract_conditions", "technical_bid_documents"],
+            **tender_doc
         })
 
     return jsonify({"tenders": output_tenders})
@@ -224,14 +163,14 @@ def process_file():
 @app.route("/generate_pdf", methods=["POST"])
 def generate_pdf():
     data = request.get_json(force=True) or {}
-    sections = data.get("sections", [])
-    title    = data.get("title", "Tender Synopsis")
+    tender = data.get("tender", {})
+    title  = data.get("title", tender.get("tender_information", {}).get("title", "Tender Synopsis"))
 
-    if not sections:
-        return jsonify({"error": "No sections data provided"}), 400
+    if not tender:
+        return jsonify({"error": "No tender data provided"}), 400
 
     try:
-        pdf_bytes = generate_tender_pdf(sections, doc_title=title)
+        pdf_bytes = generate_tender_pdf(tender, doc_title=title)
     except Exception as e:
         return jsonify({"error": f"PDF generation failed: {str(e)}"}), 500
 
@@ -258,8 +197,6 @@ def generate_pdf():
 # ──────────────────────────────────────────────────────────────────────────────
 @app.route("/response", methods=["POST"])
 def response():
-    global token
-
     data      = request.get_json(force=True) or {}
     message   = (data.get("message")  or "").strip()
     tender_id = (data.get("tenderId") or "").strip()
@@ -268,13 +205,9 @@ def response():
         return jsonify({"error": "No message provided"}), 400
 
     try:
-        reply = generate_chat_response(token, API_URL, message, tender_id)
+        reply = generate_chat_response(get_token(), API_URL, message, tender_id)
     except Exception as e:
-        if "401" in str(e) or "Unauthorized" in str(e):
-            token = fetch_token()
-            reply = generate_chat_response(token, API_URL, message, tender_id)
-        else:
-            reply = f"AI service error: {str(e)}"
+        reply = f"AI service error: {str(e)}"
 
     return jsonify({"reply": reply})
 

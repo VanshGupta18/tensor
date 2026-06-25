@@ -25,11 +25,24 @@ function toReactShape(t) {
     lastReviewedBy: t.lastReviewedBy || '-',
     lastChangedBy:  t.lastChangedBy,
     details: {
-      budget:     t.budget,
-      deadline:   t.deadline,
-      status:     t.status,
-      location:   t.location,
-      contractor: t.contractor,
+      budget:                t.budget,
+      deadline:              t.deadline,
+      status:                t.status,
+      location:              t.location,
+      contractor:            t.contractor,
+      // AI-extracted fields
+      issuingAuthority:      t.issuingAuthority,
+      contractType:          t.contractType,
+      bidSystem:             t.bidSystem,
+      fundingAgency:         t.fundingAgency,
+      tenderFee:             t.tenderFee,
+      budgetCategory:        t.budgetCategory,
+      publicationDate:       t.publicationDate,
+      preBidMeeting:         t.preBidMeeting,
+      bidSubmissionDeadline: t.bidSubmissionDeadline,
+      technicalOpening:      t.technicalOpening,
+      financialOpening:      t.financialOpening,
+      workOrderIssuance:     t.workOrderIssuance,
     },
     remarks: (t.audits || []).map(a => ({
       fieldName: a.fieldName,
@@ -89,7 +102,7 @@ export async function deleteTender(id) {
  */
 export async function updateTender(id, formValues, changedBy) {
   await api.patch(`/Tenders(ID='${encodeURIComponent(id)}',IsActiveEntity=true)`, toCapShape(formValues, changedBy));
-  return getTenderById(id);
+  // No follow-up GET — caller reconstructs from cache in onSuccess
 }
 
 /**
@@ -97,7 +110,7 @@ export async function updateTender(id, formValues, changedBy) {
  */
 export async function markReviewed(id, username) {
   await api.patch(`/Tenders(ID='${encodeURIComponent(id)}',IsActiveEntity=true)`, { lastReviewedBy: username });
-  return getTenderById(id);
+  // No follow-up GET — mutation's onSuccess reconstructs from cache
 }
 
 /**

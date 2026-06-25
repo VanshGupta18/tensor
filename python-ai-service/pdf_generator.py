@@ -1,24 +1,8 @@
-"""
-pdf_generator.py
- ─────────────────
-Renders a Tender Synopsis PDF that mirrors the DOCX template:
-  - Navy title banner with org name, tender number, version and date
-  - Numbered sections with column-header rows ("Parameter | Details", etc.)
-  - Alternating row shading in all tables
-  - Key Documents section rendered as a bullet list
-  - Plain-text fallback for narrative sections (JV, Disclaimer)
-  - Nested contact_details collapsed into a single "Contact" row
-
-Input:  sections list from the structured tender JSON.
-Output: PDF bytes (ReportLab — no system dependencies).
-"""
-
 import html
 import re
 from io import BytesIO
 
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
@@ -30,422 +14,288 @@ from reportlab.platypus import (
     TableStyle,
 )
 
-# Characters outside WinAnsiEncoding that appear in tender data — replace before
-# passing to Paragraph() which uses built-in Helvetica (Latin-1 / WinAnsi only).
 _CHAR_SUBS = str.maketrans({
     '₹': 'Rs.',    # ₹ Indian Rupee
-    '€': 'EUR ',   # € Euro (not always in WinAnsi depending on build)
-    '£': 'GBP ',   # £ Pound (is in Latin-1 but safe to keep)
-    '≥': '>=',     # ≥ greater-than-or-equal (U+2265, not in Latin-1)
-    '≤': '<=',     # ≤ less-than-or-equal (U+2264, not in Latin-1)
-    '×': 'x',      # × multiplication sign
-    '–': '-',      # – en-dash
-    '—': '--',     # — em-dash
-    '‘': "'",      # ' left single quote
-    '’': "'",      # ' right single quote
-    '“': '"',      # " left double quote
-    '”': '"',      # " right double quote
-    '…': '...',    # … ellipsis
-    ' ': ' ',      # non-breaking space
+    '€': 'EUR ',   # € Euro 
+    '£': 'GBP ',   # £ Pound 
+    '≥': '>=',     
+    '≤': '<=',     
+    '×': 'x',      
+    '–': '-',      
+    '—': '--',     
+    '‘': "'",      
+    '’': "'",      
+    '“': '"',      
+    '”': '"',      
+    '…': '...',    
+    ' ': ' ',      
 })
 
 def _safe(text) -> str:
-    """Escape & < > and replace chars outside Latin-1/WinAnsi so ReportLab doesn't crash."""
-    if not text:
-        return ""
+    if not text: return ""
     s = str(text).translate(_CHAR_SUBS)
     s = html.escape(s)
-    # Drop any remaining non-Latin-1 chars rather than crashing
     s = s.encode('latin-1', errors='replace').decode('latin-1')
     return s
 
-
-# ── Colour palette ────────────────────────────────────────────────────────────
 _NAVY      = colors.HexColor("#1e3a5f")
 _WHITE     = colors.white
-_COL_HDR   = colors.HexColor("#c5d5e8")   # column-header row fill
-_ROW_ALT   = colors.HexColor("#f0f5fa")   # alternating data row fill
+_COL_HDR   = colors.HexColor("#c5d5e8")
+_ROW_ALT   = colors.HexColor("#f0f5fa")
 _BORDER    = colors.HexColor("#9fb3c8")
 _LABEL_FG  = colors.HexColor("#334155")
 _BODY_FG   = colors.HexColor("#1e293b")
 _MUTED     = colors.HexColor("#64748b")
 
-# ── Section configuration ─────────────────────────────────────────────────────
-# Maps section heading key → (display label, [left-col, right-col] or None)
-# None means the section is rendered as plain text or a bullet list.
-_SECTION_CFG = {
-    "tender_information":      ("Basic Tender Particulars",              ["Parameter",       "Details"]),
-    "key_dates":               ("Key Dates",                             ["Event",           "Date & Time (IST)"]),
-    "scope_of_work":           ("Scope of Work",                         ["Item",            "Details"]),
-    "experience_requirements": ("Experience Requirements",               ["Criterion",       "Requirement"]),
-    "financial_requirements":  ("Financial Requirements",                ["Criterion",       "Requirement"]),
-    "eligibility_criteria":    ("Eligibility & Qualification",           ["Criterion",       "Requirement"]),
-    "bid_security_financials": ("Bid Security & Financial Requirements", ["Item",            "Requirement"]),
-    "payment_terms":           ("Payment Terms",                         ["Item",            "Details"]),
-    "price_variation":         ("Price Variation / Escalation",          ["Material / Item", "Details"]),
-    "contract_conditions":     ("Key Contract Conditions",               ["Condition",       "Details"]),
-    "jv_requirements":         ("Joint Venture Requirements",            None),
-    "technical_bid_documents": ("Key Documents – Technical Bid (Envelope 1)", None),
-    "disclaimer":              ("Disclaimer",                            None),
-}
-
-# Sections rendered as bullet lists (content split by newlines)
-_BULLET_SECTIONS = {"technical_bid_documents"}
-
-# Sections rendered as plain paragraphs (no table)
-_PLAIN_SECTIONS  = {"jv_requirements", "disclaimer"}
-
-
-def _section_label(key: str) -> str:
-    cfg = _SECTION_CFG.get(key)
-    return cfg[0] if cfg else key.replace("_", " ").title()
-
-
-def _col_headers(key: str):
-    cfg = _SECTION_CFG.get(key)
-    return cfg[1] if cfg else ["Item", "Details"]
-
-
-# ── Styles ────────────────────────────────────────────────────────────────────
-
 def _build_styles():
     ss = getSampleStyleSheet()
-
-    ss.add(ParagraphStyle("BannerTitle",
-        parent=ss["Normal"], fontSize=22, leading=28,
-        textColor=_WHITE, alignment=TA_CENTER, fontName="Helvetica-Bold",
-    ))
-    ss.add(ParagraphStyle("BannerOrg",
-        parent=ss["Normal"], fontSize=11, leading=15,
-        textColor=_WHITE, alignment=TA_CENTER, fontName="Helvetica-Bold",
-    ))
-    ss.add(ParagraphStyle("BannerMeta",
-        parent=ss["Normal"], fontSize=10, leading=14,
-        textColor=colors.HexColor("#c8dff0"), alignment=TA_CENTER,
-    ))
-    ss.add(ParagraphStyle("SectionHeading",
-        parent=ss["Normal"], fontSize=12, leading=16,
-        textColor=_NAVY, fontName="Helvetica-Bold",
-        spaceBefore=18, spaceAfter=5,
-    ))
-    ss.add(ParagraphStyle("ColHeader",
-        parent=ss["Normal"], fontSize=9, leading=12,
-        textColor=_LABEL_FG, fontName="Helvetica-Bold",
-    ))
-    ss.add(ParagraphStyle("CellLabel",
-        parent=ss["Normal"], fontSize=9, leading=12,
-        textColor=_LABEL_FG, fontName="Helvetica-Bold",
-    ))
-    ss.add(ParagraphStyle("CellValue",
-        parent=ss["Normal"], fontSize=9, leading=12,
-        textColor=_BODY_FG,
-    ))
-    ss.add(ParagraphStyle("BodyPara",
-        parent=ss["Normal"], fontSize=10, leading=14,
-        textColor=_BODY_FG, spaceAfter=6,
-    ))
-    ss.add(ParagraphStyle("BulletItem",
-        parent=ss["Normal"], fontSize=9, leading=13,
-        textColor=_BODY_FG, leftIndent=14, firstLineIndent=-10, spaceAfter=4,
-    ))
-    ss.add(ParagraphStyle("SubLabel",
-        parent=ss["Normal"], fontSize=9, leading=12,
-        textColor=_MUTED, fontName="Helvetica-Bold",
-        spaceBefore=6, spaceAfter=3,
-    ))
-
+    ss.add(ParagraphStyle("BannerTitle", parent=ss["Title"], fontSize=18, leading=22, textColor=_WHITE, fontName="Helvetica-Bold", spaceAfter=4))
+    ss.add(ParagraphStyle("BannerOrg", parent=ss["Normal"], fontSize=12, leading=16, textColor=_WHITE, fontName="Helvetica", alignment=1))
+    ss.add(ParagraphStyle("BannerMeta", parent=ss["Normal"], fontSize=10, leading=14, textColor=colors.HexColor("#cbd5e1"), fontName="Helvetica", alignment=1, spaceBefore=4))
+    ss.add(ParagraphStyle("SectionHeading", parent=ss["Heading2"], fontSize=14, leading=18, textColor=_NAVY, fontName="Helvetica-Bold", spaceBefore=16, spaceAfter=8))
+    ss.add(ParagraphStyle("SubLabel", parent=ss["Normal"], fontSize=11, leading=14, textColor=_NAVY, fontName="Helvetica-Bold", spaceBefore=8, spaceAfter=4))
+    ss.add(ParagraphStyle("ColHeader", parent=ss["Normal"], fontSize=10, leading=12, textColor=_NAVY, fontName="Helvetica-Bold"))
+    ss.add(ParagraphStyle("CellLabel", parent=ss["Normal"], fontSize=10, leading=14, textColor=_LABEL_FG, fontName="Helvetica-Bold"))
+    ss.add(ParagraphStyle("CellValue", parent=ss["Normal"], fontSize=10, leading=14, textColor=_BODY_FG, fontName="Helvetica"))
+    ss.add(ParagraphStyle("BodyPara", parent=ss["Normal"], fontSize=10, leading=14, textColor=_BODY_FG, fontName="Helvetica", spaceBefore=6, spaceAfter=6))
+    ss.add(ParagraphStyle("BulletItem", parent=ss["Normal"], fontSize=10, leading=14, textColor=_BODY_FG, fontName="Helvetica", spaceBefore=2, leftIndent=10, firstLineIndent=-10))
     return ss
 
-
-# ── Title block ───────────────────────────────────────────────────────────────
-
-def _build_title_block(sections: list, styles, page_w: float) -> list:
-    title, org, tender_no, version, date_issue = "", "", "", "", ""
-
-    ti = next((s for s in sections if s.get("heading") == "tender_information"), None)
-    if ti:
-        for sh in (ti.get("sub_headings") or []):
-            h = sh.get("heading", "")
-            c = sh.get("content", "")
-            if   h == "tender_title":        title      = c
-            elif h == "issuing_authority":   org        = c
-            elif h == "tender_no":           tender_no  = c
-            elif h == "version":             version    = c
-            elif h == "date_of_issue":       date_issue = c
-
+def _build_title_block(tender: dict, styles, page_w: float) -> list:
+    ti = tender.get("tender_information", {})
+    title = ti.get("title", "")
+    org = ti.get("issuing_authority", "")
+    tender_no = ti.get("reference_no", "")
+    version = ti.get("version", "")
+    
     rows = [[Paragraph("TENDER SYNOPSIS", styles["BannerTitle"])]]
-    if org:
-        rows.append([Paragraph(_safe(org), styles["BannerOrg"])])
-    if title:
-        rows.append([Paragraph(_safe(title), styles["BannerOrg"])])
+    if org: rows.append([Paragraph(_safe(org), styles["BannerOrg"])])
+    if title: rows.append([Paragraph(_safe(title), styles["BannerOrg"])])
 
     meta_parts = []
     if tender_no:
         line = f"Tender No: {_safe(tender_no)}"
-        if version:
-            line += f"  |  Version {_safe(version)}"
+        if version: line += f"  |  Version {_safe(version)}"
         meta_parts.append(line)
-    if date_issue:
-        meta_parts.append(f"Date of Issue: {_safe(date_issue)}")
     if meta_parts:
         rows.append([Paragraph("  |  ".join(meta_parts), styles["BannerMeta"])])
 
     tbl = Table(rows, colWidths=[page_w])
     tbl.setStyle(TableStyle([
-        ("BACKGROUND",    (0, 0), (-1, -1), _NAVY),
-        ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
-        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
-        ("TOPPADDING",    (0, 0), (0,  0),  10),
+        ("BACKGROUND", (0, 0), (-1, -1), _NAVY),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (0,  0),  10),
         ("BOTTOMPADDING", (0, 0), (0,  0),  6),
-        ("TOPPADDING",    (0, 1), (-1, -1), 4),
+        ("TOPPADDING", (0, 1), (-1, -1), 4),
         ("BOTTOMPADDING", (0, 1), (-1, -1), 4),
-        ("LEFTPADDING",   (0, 0), (-1, -1), 12),
-        ("RIGHTPADDING",  (0, 0), (-1, -1), 12),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
     ]))
-
     return [tbl, Spacer(1, 10)]
 
-
-# ── Table helpers ─────────────────────────────────────────────────────────────
-
-def _flatten_leaves(sub_headings: list) -> str:
-    """
-    If every child is a leaf node, concatenate as 'Key: value  |  Key: value'.
-    Used to collapse contact_details into a single table cell.
-    """
-    parts = []
-    for sh in sub_headings:
-        label = sh.get("heading", "").replace("_", " ").title()
-        value = (sh.get("content") or "").strip()
-        if value:
-            parts.append(f"{_safe(label)}: {_safe(value)}")
-    return "  |  ".join(parts)
-
-
-def _emit_table(rows: list, page_w: float, depth: int, has_header: bool) -> list:
-    indent = depth * 10 * mm
-    avail  = page_w - indent
-    col_w  = [avail * 0.33, avail * 0.67]
-
-    tbl = Table(rows, colWidths=col_w, hAlign="LEFT",
-                repeatRows=1 if has_header else 0)
-
+def _emit_table(rows: list, page_w: float, has_header: bool) -> list:
+    if not rows: return []
+    col_w  = [page_w * 0.33, page_w * 0.67]
+    tbl = Table(rows, colWidths=col_w, hAlign="LEFT", repeatRows=1 if has_header else 0, splitByRow=1)
     cmds = [
-        ("VALIGN",        (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING",   (0, 0), (-1, -1), 8),
-        ("RIGHTPADDING",  (0, 0), (-1, -1), 8),
-        ("TOPPADDING",    (0, 0), (-1, -1), 5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-        ("GRID",          (0, 0), (-1, -1), 0.4, _BORDER),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ("GRID", (0, 0), (-1, -1), 0.4, _BORDER),
     ]
-
-    start = 0
-    if has_header:
-        cmds.append(("BACKGROUND", (0, 0), (-1, 0), _COL_HDR))
-        start = 1
-
+    start = 1 if has_header else 0
+    if has_header: cmds.append(("BACKGROUND", (0, 0), (-1, 0), _COL_HDR))
     for i in range(start, len(rows)):
-        if (i - start) % 2 == 0:
-            cmds.append(("BACKGROUND", (0, i), (-1, i), _ROW_ALT))
-
+        if (i - start) % 2 == 0: cmds.append(("BACKGROUND", (0, i), (-1, i), _ROW_ALT))
     tbl.setStyle(TableStyle(cmds))
-
-    if indent > 0:
-        wrapper = Table([[tbl]], colWidths=[avail])
-        wrapper.setStyle(TableStyle([
-            ("LEFTPADDING",   (0, 0), (-1, -1), indent),
-            ("RIGHTPADDING",  (0, 0), (-1, -1), 0),
-            ("TOPPADDING",    (0, 0), (-1, -1), 0),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
-        ]))
-        return [wrapper, Spacer(1, 4)]
-
     return [tbl, Spacer(1, 4)]
 
+def _to_para(label: str, style) -> Paragraph:
+    return Paragraph(_safe(str(label)), style)
 
-def _is_list_like(text: str) -> bool:
-    """True if content looks like a comma/semicolon/newline-separated list."""
-    return text.count(",") >= 3 or text.count(";") >= 2 or text.count("\n") >= 2
-
-
-def _build_section_table(sub_headings: list, styles, page_w: float,
-                         col_headers=None, depth: int = 0) -> list:
-    """
-    Render sub_headings as a 2-column table.
-    - If col_headers provided, first row is a styled header row.
-    - Nested leaf groups are flattened into a single value cell.
-    - Nested non-leaf groups get a sub-label and their own indented table.
-    """
-    flowables = []
-    rows      = []
-
-    if col_headers:
-        rows.append([
-            Paragraph(col_headers[0], styles["ColHeader"]),
-            Paragraph(col_headers[1], styles["ColHeader"]),
-        ])
-
-    for sh in sub_headings:
-        heading = sh.get("heading", "")
-        content = (sh.get("content") or "").strip()
-        nested  = sh.get("sub_headings") or []
-        label   = heading.replace("_", " ").title()
-
-        if nested:
-            all_leaves = all(not (n.get("sub_headings") or []) for n in nested)
-            if all_leaves:
-                # Compact: fold all children into one value cell
-                rows.append([
-                    Paragraph(_safe(label), styles["CellLabel"]),
-                    Paragraph(_flatten_leaves(nested) or "—", styles["CellValue"]),
-                ])
-            else:
-                # Flush current rows, then render sub-section separately
-                if rows:
-                    flowables.extend(_emit_table(rows, page_w, depth, bool(col_headers)))
-                    rows = ([
-                        [Paragraph(col_headers[0], styles["ColHeader"]),
-                         Paragraph(col_headers[1], styles["ColHeader"])]
-                    ] if col_headers else [])
-
-                flowables.append(Paragraph(f"<b>{_safe(label)}</b>", styles["SubLabel"]))
-                flowables.extend(
-                    _build_section_table(nested, styles, page_w, depth=depth + 1)
-                )
-        else:
-            if not content:
-                continue  # Skip rows with no extracted content
-            
-            # Long content can't fit in a table cell — a single row taller than
-            # the page frame causes ReportLab to crash. Render as label + paragraph.
-            if len(content) > 600:
-                if rows:
-                    data_rows = rows[1:] if col_headers else rows
-                    if data_rows:
-                        flowables.extend(_emit_table(rows, page_w, depth, bool(col_headers)))
-                    rows = ([
-                        [Paragraph(col_headers[0], styles["ColHeader"]),
-                         Paragraph(col_headers[1], styles["ColHeader"])]
-                    ] if col_headers else [])
-                flowables.append(Paragraph(f"<b>{_safe(label)}</b>", styles["SubLabel"]))
-                if _is_list_like(content):
-                    items = [i.strip() for i in re.split(r"[,;\n]+", content) if i.strip()]
-                    for item in items:
-                        flowables.append(Paragraph(f"• {_safe(item)}", styles["BulletItem"]))
-                else:
-                    flowables.append(Paragraph(_safe(content).replace("\n", "<br/>"), styles["BodyPara"]))
-            else:
-                if _is_list_like(content):
-                    items = [i.strip() for i in re.split(r"[,;\n]+", content) if i.strip()]
-                    cell_content = "<br/>".join(f"• {_safe(i)}" for i in items)
-                else:
-                    cell_content = _safe(content).replace("\n", "<br/>")
-                rows.append([
-                    Paragraph(_safe(label), styles["CellLabel"]),
-                    Paragraph(cell_content, styles["CellValue"]),
-                ])
-
-    if rows:
-        # Don't emit a header-only table (all data rows were skipped as empty)
-        data_rows = rows[1:] if col_headers else rows
-        if data_rows:
-            flowables.extend(_emit_table(rows, page_w, depth, bool(col_headers)))
-
-    return flowables
-
-
-# ── Bullet-list rendering (for technical_bid_documents) ──────────────────────
-
-def _build_bullet_list(content: str, sub_headings: list, styles) -> list:
-    flowables = []
-    all_text = content
-    for sh in sub_headings:
-        c = (sh.get("content") or "").strip()
-        if c:
-            all_text = (all_text + "\n" + c).strip()
-
-    for line in all_text.split("\n"):
-        line = line.strip()
-        if line:
-            flowables.append(Paragraph(f"• {_safe(line)}", styles["BulletItem"]))
-
-    return flowables
-
-
-# ── Plain-text rendering (for jv_requirements, disclaimer, bare content) ──────
-
-def _build_plain_text(content: str, sub_headings: list, styles) -> list:
-    flowables = []
-    if content.strip():
-        flowables.append(Paragraph(_safe(content).replace("\n", "<br/>"), styles["BodyPara"]))
-    for sh in sub_headings:
-        c = (sh.get("content") or "").strip()
-        if c:
-            flowables.append(Paragraph(_safe(c).replace("\n", "<br/>"), styles["BodyPara"]))
-    return flowables
-
-
-# ── Public API ────────────────────────────────────────────────────────────────
-
-def generate_tender_pdf(sections: list, doc_title: str = "Tender Synopsis") -> bytes:
-    """
-    Generate a PDF from the tender sections JSON.
-
-    Parameters
-    ----------
-    sections : list
-        The ``sections`` array from the structured tender JSON.
-        Each element is ``{ heading, content?, sub_headings? }``.
-    doc_title : str
-        Used for the PDF metadata title.
-
-    Returns
-    -------
-    bytes
-        The rendered PDF file contents.
-    """
+def generate_tender_pdf(tender: dict, doc_title: str = "Tender Synopsis") -> bytes:
     buf = BytesIO()
-    doc = SimpleDocTemplate(
-        buf,
-        pagesize=A4,
-        leftMargin=18 * mm, rightMargin=18 * mm,
-        topMargin=15 * mm,  bottomMargin=15 * mm,
-        title=doc_title,
-    )
-
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=18*mm, rightMargin=18*mm, topMargin=15*mm, bottomMargin=15*mm, title=doc_title)
     styles = _build_styles()
     page_w = A4[0] - 36 * mm
-
-    story = _build_title_block(sections, styles, page_w)
-
+    story = _build_title_block(tender, styles, page_w)
     display_num = 0
-    for section in sections:
-        heading = section.get("heading", "")
-        content = (section.get("content") or "").strip()
-        subs    = section.get("sub_headings") or []
 
-        label = _section_label(heading)
+    # 1. Tender Information
+    ti = tender.get("tender_information", {})
+    if ti:
+        display_num += 1
+        story.append(Paragraph(f"{display_num}. Basic Tender Particulars", styles["SectionHeading"]))
+        rows = [[_to_para("Parameter", styles["ColHeader"]), _to_para("Details", styles["ColHeader"])]]
+        for k, v in ti.items():
+            if k in ("estimated_cost", "tender_fee", "contacts"): continue
+            if v: rows.append([_to_para(k.replace('_', ' ').title(), styles["CellLabel"]), _to_para(v, styles["CellValue"])])
+        
+        cost = ti.get("estimated_cost", {})
+        if cost and cost.get("amount"):
+            rows.append([_to_para("Estimated Cost", styles["CellLabel"]), _to_para(f"{cost.get('amount')} {cost.get('currency','')} {cost.get('denomination','')}".strip(), styles["CellValue"])])
+        
+        fee = ti.get("tender_fee", {})
+        if fee and fee.get("amount"):
+            rows.append([_to_para("Tender Fee", styles["CellLabel"]), _to_para(f"{fee.get('amount')} {fee.get('currency','')}".strip(), styles["CellValue"])])
+            
+        contacts = ti.get("contacts", [])
+        for c in contacts:
+            c_text = f"{c.get('name', '')} - {c.get('role', '')}".strip(" -")
+            if c.get('email'): c_text += f" (Email: {c['email']})"
+            rows.append([_to_para("Contact", styles["CellLabel"]), _to_para(c_text, styles["CellValue"])])
+        
+        story.extend(_emit_table(rows, page_w, True))
 
-        # Build body first — only add heading if body has actual content
-        body = []
-        if heading in _BULLET_SECTIONS:
-            if content:
-                body.append(Paragraph(_safe(content).replace("\n", "<br/>"), styles["BodyPara"]))
-            body.extend(_build_bullet_list("", subs, styles))
+    # 2. Key Dates
+    kd = tender.get("key_dates", {})
+    if kd:
+        display_num += 1
+        story.append(Paragraph(f"{display_num}. Key Dates", styles["SectionHeading"]))
+        rows = [[_to_para("Event", styles["ColHeader"]), _to_para("Date & Time", styles["ColHeader"])]]
+        for k, v in kd.items():
+            val = ""
+            if isinstance(v, dict): val = f"{v.get('date','')} {v.get('time','')}".strip()
+            elif isinstance(v, str): val = v
+            if val: rows.append([_to_para(k.replace('_', ' ').title(), styles["CellLabel"]), _to_para(val, styles["CellValue"])])
+        story.extend(_emit_table(rows, page_w, True))
 
-        elif heading in _PLAIN_SECTIONS or not subs:
-            body.extend(_build_plain_text(content, subs, styles))
+    # 3. Scope of Work
+    sow = tender.get("scope_of_work", [])
+    if sow and isinstance(sow, list):
+        display_num += 1
+        story.append(Paragraph(f"{display_num}. Scope of Work", styles["SectionHeading"]))
+        rows = [[_to_para("Category", styles["ColHeader"]), _to_para("Details", styles["ColHeader"])]]
+        for item in sow:
+            if item.get("category"): rows.append([_to_para(item["category"], styles["CellLabel"]), _to_para(item.get("details",""), styles["CellValue"])])
+        story.extend(_emit_table(rows, page_w, True))
 
-        else:
-            if content:
-                body.append(Paragraph(_safe(content).replace("\n", "<br/>"), styles["BodyPara"]))
-            hdrs = _col_headers(heading)
-            body.extend(_build_section_table(subs, styles, page_w, hdrs))
+    # 4. Eligibility & Qualification
+    eq = tender.get("eligibility_and_qualification", {})
+    if eq:
+        display_num += 1
+        story.append(Paragraph(f"{display_num}. Eligibility & Qualification", styles["SectionHeading"]))
+        
+        tech = eq.get("technical", {})
+        if tech:
+            story.append(Paragraph("Technical", styles["SubLabel"]))
+            if tech.get("heading_note"): story.append(Paragraph(_safe(tech["heading_note"]), styles["BodyPara"]))
+            t_rows = [[_to_para("Option", styles["ColHeader"]), _to_para("Requirement", styles["ColHeader"])]]
+            for opt in tech.get("options", []):
+                t_rows.append([_to_para(opt.get("option",""), styles["CellLabel"]), _to_para(opt.get("requirement",""), styles["CellValue"])])
+            if len(t_rows) > 1: story.extend(_emit_table(t_rows, page_w, True))
+            if tech.get("similar_works_definition"): story.append(Paragraph(f"Similar works: {_safe(tech['similar_works_definition'])}", styles["BodyPara"]))
+        
+        fin = eq.get("financial", [])
+        if fin:
+            story.append(Paragraph("Financial / Commercial", styles["SubLabel"]))
+            f_rows = [[_to_para("Criterion", styles["ColHeader"]), _to_para("Requirement", styles["ColHeader"])]]
+            for f in fin:
+                f_rows.append([_to_para(f.get("criterion",""), styles["CellLabel"]), _to_para(f.get("requirement",""), styles["CellValue"])])
+            if len(f_rows) > 1: story.extend(_emit_table(f_rows, page_w, True))
 
-        if body:
-            display_num += 1
-            story.append(Paragraph(f"{display_num}. {_safe(label)}", styles["SectionHeading"]))
-            story.extend(body)
+    # 5. Security & Financials
+    sf = tender.get("security_and_financials", {})
+    if sf:
+        display_num += 1
+        story.append(Paragraph(f"{display_num}. Security & Financial Requirements", styles["SectionHeading"]))
+        rows = [[_to_para("Item", styles["ColHeader"]), _to_para("Requirement", styles["ColHeader"])]]
+        
+        emd = sf.get("emd", {})
+        if emd:
+            rows.append([_to_para("EMD", styles["CellLabel"]), _to_para(f"{emd.get('percentage','')}%, Max: {emd.get('max_cap_inr','')}, Form: {emd.get('form','')}".strip(), styles["CellValue"])])
+        if sf.get("bid_validity_days"):
+            rows.append([_to_para("Bid Validity", styles["CellLabel"]), _to_para(f"{sf['bid_validity_days']} days", styles["CellValue"])])
+        if sf.get("performance_security_percent"):
+            rows.append([_to_para("Performance Security", styles["CellLabel"]), _to_para(f"{sf['performance_security_percent']}%", styles["CellValue"])])
+        if sf.get("cpg_supply_percent"):
+            rows.append([_to_para("CPG Supply", styles["CellLabel"]), _to_para(f"{sf['cpg_supply_percent']}%", styles["CellValue"])])
+        if sf.get("cpg_erection_percent"):
+            rows.append([_to_para("CPG Erection", styles["CellLabel"]), _to_para(f"{sf['cpg_erection_percent']}%", styles["CellValue"])])
+        
+        bd = sf.get("bank_details", {})
+        if bd:
+            rows.append([_to_para("Bank Details", styles["CellLabel"]), _to_para(f"{bd.get('bank','')}, Acc: {bd.get('account','')}, IFSC: {bd.get('ifsc','')}".strip(), styles["CellValue"])])
+        
+        story.extend(_emit_table(rows, page_w, True))
+
+    # 6. Payment Terms
+    pt = tender.get("payment_terms", {})
+    if pt:
+        display_num += 1
+        story.append(Paragraph(f"{display_num}. Payment Terms", styles["SectionHeading"]))
+        
+        rows = [[_to_para("Milestone / Component", styles["ColHeader"]), _to_para("Details", styles["ColHeader"])]]
+        for adv in pt.get("advance_payments", []):
+            conds = ", ".join(adv.get("conditions", []))
+            rows.append([_to_para(f"Advance: {adv.get('component','')}", styles["CellLabel"]), _to_para(f"{adv.get('percentage','')}%. Conditions: {conds}", styles["CellValue"])])
+        for prog in pt.get("progressive_payments", []):
+            rows.append([_to_para(f"Progressive: {prog.get('component','')}", styles["CellLabel"]), _to_para(f"{prog.get('percentage','')}%. {prog.get('milestone','')}", styles["CellValue"])])
+        
+        if pt.get("standard_timeline_days"):
+            rows.append([_to_para("Standard Timeline", styles["CellLabel"]), _to_para(f"{pt['standard_timeline_days']} days", styles["CellValue"])])
+        if pt.get("delayed_interest_rate"):
+            rows.append([_to_para("Delayed Interest Rate", styles["CellLabel"]), _to_para(pt["delayed_interest_rate"], styles["CellValue"])])
+            
+        story.extend(_emit_table(rows, page_w, True))
+
+    # 7. Price Variation
+    pv = tender.get("price_variation", {})
+    if pv and pv.get("is_applicable"):
+        display_num += 1
+        story.append(Paragraph(f"{display_num}. Price Variation", styles["SectionHeading"]))
+        rows = [[_to_para("Item", styles["ColHeader"]), _to_para("Details", styles["ColHeader"])]]
+        
+        if pv.get("applicable_components"):
+            rows.append([_to_para("Applicable Components", styles["CellLabel"]), _to_para(", ".join(pv["applicable_components"]), styles["CellValue"])])
+        if pv.get("firm_components"):
+            rows.append([_to_para("Firm Components", styles["CellLabel"]), _to_para(", ".join(pv["firm_components"]), styles["CellValue"])])
+            
+        for mat in pv.get("materials", []):
+            details = f"Index: {mat.get('index_reference','')}. Formula: {', '.join(mat.get('formula_variables', []))}"
+            rows.append([_to_para(mat.get("name",""), styles["CellLabel"]), _to_para(details, styles["CellValue"])])
+            
+        story.extend(_emit_table(rows, page_w, True))
+
+    # 8. Contract Conditions
+    cc = tender.get("contract_conditions", {})
+    if cc:
+        display_num += 1
+        story.append(Paragraph(f"{display_num}. Contract Conditions", styles["SectionHeading"]))
+        rows = [[_to_para("Condition", styles["ColHeader"]), _to_para("Details", styles["ColHeader"])]]
+        
+        if cc.get("completion_time_months"):
+            rows.append([_to_para("Completion Time", styles["CellLabel"]), _to_para(f"{cc['completion_time_months']} months", styles["CellValue"])])
+        if cc.get("defect_liability_period_months"):
+            rows.append([_to_para("Defect Liability", styles["CellLabel"]), _to_para(f"{cc['defect_liability_period_months']} months", styles["CellValue"])])
+        
+        ld = cc.get("liquidated_damages", {})
+        if ld:
+            rows.append([_to_para("Liquidated Damages", styles["CellLabel"]), _to_para(f"{ld.get('rate_per_week_percent','')} per week, max {ld.get('cap_percent','')}%", styles["CellValue"])])
+        
+        qp = cc.get("quality_penalties", {})
+        if qp:
+            rows.append([_to_para("Quality Penalties", styles["CellLabel"]), _to_para(f"Major: {qp.get('major_defect_percent','')}%, Minor: {qp.get('minor_defect_percent','')}%", styles["CellValue"])])
+            
+        if cc.get("special_requirements"):
+            rows.append([_to_para("Special Requirements", styles["CellLabel"]), _to_para(", ".join(cc["special_requirements"]), styles["CellValue"])])
+            
+        story.extend(_emit_table(rows, page_w, True))
+
+    # 9. Key Documents
+    kd_docs = tender.get("technical_bid_documents", {})
+    if kd_docs:
+        display_num += 1
+        story.append(Paragraph(f"{display_num}. Key Documents – Technical Bid", styles["SectionHeading"]))
+        
+        for f in kd_docs.get("grouped_documents", []):
+            story.append(Paragraph(f"• {_safe(f)}", styles["BulletItem"]))
+        
+        if kd_docs.get("has_price_disclosure_warning"):
+            story.append(Paragraph("<b>WARNING: No prices to be disclosed in Envelope 1</b>", styles["BodyPara"]))
 
     doc.build(story)
     return buf.getvalue()

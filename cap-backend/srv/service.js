@@ -194,39 +194,45 @@ module.exports = cds.service.impl(async function (srv) {
         }
       ];
 
-      for (const seed of seeds) {
-        await INSERT.into(Documents).entries({
-          ID: seed.docId,
-          tender_ID: seed.tenderId,
-          filename: seed.filename,
-          mimeType: 'application/pdf',
-          uploadedBy: 'system',
-          uploadedAt: now,
-        });
+      await INSERT.into(Documents).entries(seeds.map(seed => ({
+        ID: seed.docId,
+        tender_ID: seed.tenderId,
+        filename: seed.filename,
+        mimeType: 'application/pdf',
+        uploadedBy: 'system',
+        uploadedAt: now,
+      })));
 
-        await INSERT.into(AIResults).entries({
-          ID: `air-seed-${seed.tenderId.toLowerCase()}`,
-          document_ID: seed.docId,
-          confidenceScore: 'high',
-          summary: seed.sections[0]?.sub_headings?.[0]?.content || seed.tenderId,
-          keyTerms: JSON.stringify(seed.sections[0]?.sub_headings?.map(s => s.heading) || []),
-          rawResponse: JSON.stringify({ sections: seed.sections }),
-          processedAt: now,
-        });
-      }
+      await INSERT.into(AIResults).entries(seeds.map(seed => ({
+        ID: `air-seed-${seed.tenderId.toLowerCase()}`,
+        document_ID: seed.docId,
+        confidenceScore: 'high',
+        summary: seed.sections[0]?.sub_headings?.[0]?.content || seed.tenderId,
+        keyTerms: JSON.stringify(seed.sections[0]?.sub_headings?.map(s => s.heading) || []),
+        rawResponse: JSON.stringify({ sections: seed.sections }),
+        processedAt: now,
+      })));
 
       console.log('[TenderService] Seeded initial tender data with AI sections.');
     }
   });
 
-  // ── PATCH Tender: auto-increment version ────────────────────────────────────
-  srv.before('UPDATE', Tenders, async (req) => {
-    const id = req.data.ID || req.params[0]?.ID || req.params[0];
-    if (!id) return;
-    const existing = await SELECT.one.from(Tenders).where({ ID: id });
-    if (existing) {
-      req.data.version = (existing.version || 1) + 1;
-    }
+  // ── READ Tenders: per-user data isolation ──────────────────────────────────
+  // With dummy auth (dev) this is a no-op. In production (XSUAA), non-admin
+  // users only see tenders they created.
+  srv.before('READ', Tenders, (req) => {
+    if (cds.env.requires?.auth?.kind === 'dummy') return;
+    if (req.user.is('admin')) return;
+    req.query.where({ createdBy: req.user.id });
+  });
+
+  // ── PATCH Tender: protect PDF-extracted fields ──────────────────────────────
+  // version and tenderNo are set by processFile from PDF extraction.
+  // Strip them from any direct PATCH so the form auto-saves cannot overwrite them.
+  // To bump the version explicitly, call the incrementVersion() bound action instead.
+  srv.before('UPDATE', Tenders, (req) => {
+    delete req.data.version;
+    delete req.data.tenderNo;
   });
 
   // ── Bound Action: incrementVersion (explicit call) ──────────────────────────
@@ -235,7 +241,9 @@ module.exports = cds.service.impl(async function (srv) {
     const existing = await SELECT.one.from(Tenders).where({ ID: id });
     if (!existing) return req.error(404, `Tender ${id} not found`);
     const newVersion = (existing.version || 1) + 1;
-    await UPDATE(Tenders).set({ version: newVersion }).where({ ID: id });
+    // Use cds.db.run to bypass the service before('UPDATE') guard — this is a deliberate
+    // explicit version bump, not a form auto-save.
+    await cds.db.run(UPDATE(Tenders).set({ version: newVersion }).where({ ID: id }));
     return SELECT.one.from(Tenders).where({ ID: id });
   });
 
@@ -372,6 +380,23 @@ module.exports = cds.service.impl(async function (srv) {
       return `TND-${String(next).padStart(3, '0')}`;
     };
 
+    // Format AI money object → "INR 52,546.85 Lakhs"
+    const fmtMoney = (obj) => {
+      if (!obj || !obj.amount) return '';
+      const amt = Number(obj.amount).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+      const den = obj.denomination && obj.denomination !== 'None' && obj.denomination !== 'null' ? ` ${obj.denomination}` : '';
+      return `${obj.currency || 'INR'} ${amt}${den}`;
+    };
+    // Format AI date/time object → "09/06/2026  ·  15:00 IST"
+    const fmtDateTime = (v) => {
+      if (!v) return '';
+      if (typeof v === 'string') return v;
+      const parts = [];
+      if (v.date) parts.push(v.date);
+      if (v.time) parts.push(`${v.time} ${v.timezone || v.tz || 'IST'}`);
+      return parts.join('  ·  ');
+    };
+
     // Normalize tenderNo: collapse spaces around delimiters, strip trailing version suffixes.
     // Handles AI inconsistencies like "CE-SPD/ ADB/ 2026-27/ T-13 VERSION- 2" → "CE-SPD/ADB/2026-27/T-13"
     const normalizeTenderNo = (str) => {
@@ -389,22 +414,40 @@ module.exports = cds.service.impl(async function (srv) {
     const results = [];
 
     for (const aiTender of pyTenders) {
-      const sections = aiTender.sections || [];
-
-      // Extract key fields
-      const rawTenderNo         = getSubField(sections, 'tender_information', 'tender_no') || '';
+      // Extract key fields using the new strict JSON schema
+      const tenderInfo = aiTender.tender_information || {};
+      const keyDates = aiTender.key_dates || {};
+      
+      const rawTenderNo         = tenderInfo.reference_no || '';
       const extractedTenderNo   = normalizeTenderNo(rawTenderNo);
-      const extractedTitle      = getSubField(sections, 'tender_information', 'tender_title')   || aiTender.summary || 'Untitled Tender';
-      const extractedBudget     = getSubField(sections, 'tender_information', 'estimated_cost');
-      const extractedDeadline   = parseDate(getSubField(sections, 'key_dates', 'bid_submission_deadline'));
-      const extractedLocation   = getSubField(sections, 'scope_of_work',      'location');
-      const extractedAuthority  = getSubField(sections, 'tender_information', 'issuing_authority');
-      // Try explicit version field first, then extract from raw tender_no (e.g. "VERSION- 2" or "V-2")
+      const extractedTitle      = tenderInfo.title || aiTender.summary || 'Untitled Tender';
+      
+      const extractedBudget          = fmtMoney(tenderInfo.estimated_cost) || '';
+      const extractedDeadline        = parseDate(keyDates.bid_submission_deadline?.date);
+      const extractedLocation        = '';
+      // AI-enriched fields
+      const extractedAuthority       = tenderInfo.issuing_authority || '';
+      const extractedContractType    = tenderInfo.contract_type     || '';
+      const extractedBidSystem       = tenderInfo.bid_system        || '';
+      const extractedFundingAgency   = tenderInfo.funding_agency    || '';
+      const extractedTenderFee       = fmtMoney(tenderInfo.tender_fee);
+      const extractedBudgetCategory  = tenderInfo.budget_category   || '';
+      const extractedPublicationDate = fmtDateTime(keyDates.publication);
+      const extractedPreBidMeeting   = fmtDateTime(keyDates.pre_bid_meeting);
+      const extractedBidSubDeadline  = fmtDateTime(keyDates.bid_submission_deadline);
+      const extractedTechOpening     = fmtDateTime(keyDates.technical_opening);
+      const extractedFinOpening      = fmtDateTime(keyDates.financial_opening);
+      const extractedWorkOrder       = fmtDateTime(keyDates.work_order_issuance);
+
+      const parseVersionStr = (s) => {
+        const m = s && String(s).match(/(\d+)/);
+        return m ? parseInt(m[1], 10) : null;
+      };
       const versionFromTenderNo = (() => {
         const m = rawTenderNo.match(/VERSION\s*-?\s*(\d+)/i) || rawTenderNo.match(/\bV\s*-\s*(\d+)\b/i);
         return m ? parseInt(m[1], 10) : null;
       })();
-      const extractedVersion    = parseInt(getSubField(sections, 'tender_information', 'version'), 10) || versionFromTenderNo || 1;
+      const extractedVersion = parseVersionStr(tenderInfo.version) || versionFromTenderNo || 1;
 
       // Save document (linked later once we know tender ID)
       const docId = cds.utils.uuid();
@@ -431,7 +474,7 @@ module.exports = cds.service.impl(async function (srv) {
           try {
             await INSERT.into(Tenders).entries({
               ID:            resultTenderId,
-              tenderNo:      extractedTenderNo || '',
+              tenderNo:      extractedTenderNo || null,
               version:       extractedVersion,
               title:         extractedTitle,
               budget:        extractedBudget  || 'TBD',
@@ -447,6 +490,25 @@ module.exports = cds.service.impl(async function (srv) {
           } catch (insertErr) {
             if (attempt === 4) throw insertErr;
           }
+        }
+        // Enrich with AI-extracted fields (safe — if columns not yet deployed, warns and continues)
+        try {
+          await UPDATE(Tenders).set({
+            issuingAuthority:      extractedAuthority      || undefined,
+            contractType:          extractedContractType   || undefined,
+            bidSystem:             extractedBidSystem      || undefined,
+            fundingAgency:         extractedFundingAgency  || undefined,
+            tenderFee:             extractedTenderFee      || undefined,
+            budgetCategory:        extractedBudgetCategory || undefined,
+            publicationDate:       extractedPublicationDate || undefined,
+            preBidMeeting:         extractedPreBidMeeting  || undefined,
+            bidSubmissionDeadline: extractedBidSubDeadline || undefined,
+            technicalOpening:      extractedTechOpening    || undefined,
+            financialOpening:      extractedFinOpening     || undefined,
+            workOrderIssuance:     extractedWorkOrder      || undefined,
+          }).where({ ID: resultTenderId });
+        } catch (enrichErr) {
+          console.warn('[TenderService] AI field enrichment skipped (run cds deploy):', enrichErr.message);
         }
 
       } else {
@@ -472,6 +534,25 @@ module.exports = cds.service.impl(async function (srv) {
           }
         }
         // Do NOT update DB — return requiresConfirmation so React asks the user first
+        // Always silently update AI-enriched fields (no user confirmation needed)
+        try {
+          await UPDATE(Tenders).set({
+            issuingAuthority:      extractedAuthority      || undefined,
+            contractType:          extractedContractType   || undefined,
+            bidSystem:             extractedBidSystem      || undefined,
+            fundingAgency:         extractedFundingAgency  || undefined,
+            tenderFee:             extractedTenderFee      || undefined,
+            budgetCategory:        extractedBudgetCategory || undefined,
+            publicationDate:       extractedPublicationDate || undefined,
+            preBidMeeting:         extractedPreBidMeeting  || undefined,
+            bidSubmissionDeadline: extractedBidSubDeadline || undefined,
+            technicalOpening:      extractedTechOpening    || undefined,
+            financialOpening:      extractedFinOpening     || undefined,
+            workOrderIssuance:     extractedWorkOrder      || undefined,
+          }).where({ ID: resultTenderId });
+        } catch (enrichErr) {
+          console.warn('[TenderService] AI field enrichment skipped (run cds deploy):', enrichErr.message);
+        }
       }
 
       // Save document linked to this tender
@@ -485,7 +566,7 @@ module.exports = cds.service.impl(async function (srv) {
       if (axios) {
         try {
           const pdfRes = await axios.post(`${PYTHON_AI_URL}/generate_pdf`, {
-            sections,
+            tender: aiTender,
             title: aiTender.summary || extractedTitle,
           }, { timeout: 30_000, responseType: 'arraybuffer' });
           pdfBuffer = Buffer.from(pdfRes.data);
@@ -502,7 +583,7 @@ module.exports = cds.service.impl(async function (srv) {
         confidenceScore: String(aiTender.confidenceScore || 'high'),
         summary:         aiTender.summary || '',
         keyTerms:        JSON.stringify(aiTender.keyTerms || []),
-        rawResponse:     JSON.stringify({ sections }),
+        rawResponse:     JSON.stringify(aiTender),
         processedAt:     new Date().toISOString(),
       });
       if (pdfBuffer) {
@@ -580,7 +661,7 @@ module.exports = cds.service.impl(async function (srv) {
   // ── Action: updateAIResult ───────────────────────────────────────────────────
   srv.on('updateAIResult', async (req) => {
     const { id, rawResponse } = req.data;
-    const existing = await SELECT.one.from(AIResults).where({ ID: id });
+    const existing = await SELECT.one.from(AIResults).columns('ID').where({ ID: id });
     if (!existing) return req.error(404, `AIResult ${id} not found`);
     await UPDATE(AIResults).set({ rawResponse }).where({ ID: id });
     return JSON.stringify({ success: true });
@@ -592,8 +673,10 @@ module.exports = cds.service.impl(async function (srv) {
     const timestamp = new Date().toISOString();
     const reqUser  = req.user?.id || 'user';
 
-    // 1. Persist user message
-    await INSERT.into(ChatHistories).entries({
+    // 1+2. Persist user message AND call Python in parallel — don't block the AI call on a DB write
+    let botReply = '[AI service unavailable] Your message was received.';
+
+    const userInsert = INSERT.into(ChatHistories).entries({
       ID: cds.utils.uuid(),
       tender_ID: tenderId || null,
       sender: 'user',
@@ -601,23 +684,16 @@ module.exports = cds.service.impl(async function (srv) {
       timestamp
     });
 
-    // 2. Call Python /response endpoint
-    let botReply = '[AI service unavailable] Your message was received.';
+    const pyCall = axios
+      ? axios.post(`${PYTHON_AI_URL}/response`, { message, tenderId, user: reqUser }, { timeout: 60_000 })
+          .then(r => r.data?.reply || r.data?.response || JSON.stringify(r.data))
+          .catch(err => {
+            console.error('[TenderService] Python chat error:', err.message);
+            return `[AI Error] ${err.message}. Your message was received.`;
+          })
+      : Promise.resolve(botReply);
 
-    if (axios) {
-      try {
-        const pyRes = await axios.post(`${PYTHON_AI_URL}/response`, {
-          message,
-          tenderId,
-          user: reqUser
-        }, { timeout: 20_000 });
-
-        botReply = pyRes.data?.reply || pyRes.data?.response || JSON.stringify(pyRes.data);
-      } catch (err) {
-        console.error('[TenderService] Python chat error:', err.message);
-        botReply = `[AI Error] ${err.message}. Your message was received.`;
-      }
-    }
+    [, botReply] = await Promise.all([userInsert, pyCall]);
 
     // 3. Persist bot reply
     await INSERT.into(ChatHistories).entries({
@@ -646,10 +722,18 @@ module.exports = cds.service.impl(async function (srv) {
 
     let aiResult = null;
     for (const doc of docs) {
-      const result = await SELECT.one.from(AIResults).where({ document_ID: doc.ID });
-      if (result?.rawResponse) {
-        aiResult = result;
-        break;
+      // Project away rawResponse in the discovery pass — only fetch it once we've found the right row
+      const meta = await SELECT.one.from(AIResults)
+        .columns('ID', 'summary', 'processedAt')
+        .where({ document_ID: doc.ID });
+      if (meta) {
+        const detail = await SELECT.one.from(AIResults)
+          .columns('rawResponse', 'summary')
+          .where({ ID: meta.ID });
+        if (detail?.rawResponse) {
+          aiResult = { ...meta, ...detail };
+          break;
+        }
       }
     }
 
@@ -660,16 +744,18 @@ module.exports = cds.service.impl(async function (srv) {
     // 2. Generate PDF fresh every time (always use latest template)
     if (!axios) return req.error(503, 'axios not installed');
 
-    let sections = [];
+    let parsed = null;
     try {
-      const parsed = JSON.parse(aiResult.rawResponse);
-      sections = parsed.sections || [];
+      parsed = JSON.parse(aiResult.rawResponse);
     } catch { return req.error(500, 'Failed to parse stored AI data'); }
+
+    // Support both old format ({sections:[...]}) and new format ({tenders:[...]})
+    const tenderDoc = parsed?.tenders?.[0] ?? parsed ?? {};
 
     let pdfBuffer;
     try {
       const pyRes = await axios.post(`${PYTHON_AI_URL}/generate_pdf`, {
-        sections,
+        tender: tenderDoc,
         title: aiResult.summary || 'Tender Synopsis',
       }, { timeout: 30_000, responseType: 'arraybuffer' });
       pdfBuffer = Buffer.from(pyRes.data);
@@ -694,6 +780,28 @@ module.exports = cds.service.impl(async function (srv) {
     }
 
     return pdfBuffer.toString('base64');
+  });
+
+  // ── Action: correctTenderVersion ─────────────────────────────────────────────
+  // One-time correction for tenders whose version was corrupted by the old
+  // auto-increment-on-every-PATCH bug. Uses cds.db.run to bypass the PATCH guard.
+  srv.on('correctTenderVersion', async (req) => {
+    const { tenderId, version } = req.data;
+    if (!tenderId || !version || version < 1) return req.error(400, 'tenderId and a positive version are required');
+    const existing = await SELECT.one.from(Tenders).columns('ID').where({ ID: tenderId });
+    if (!existing) return req.error(404, `Tender ${tenderId} not found`);
+    await cds.db.run(UPDATE(Tenders).set({ version }).where({ ID: tenderId }));
+    return JSON.stringify({ success: true, tenderId, version });
+  });
+
+  // ── Action: getAIResultDetail ────────────────────────────────────────────────
+  // Fetch the full AIResult including rawResponse (LargeString).
+  // Intentionally separate from the OData entity projection so list queries stay lightweight.
+  srv.on('getAIResultDetail', async (req) => {
+    const { id } = req.data;
+    const result = await SELECT.one.from(AIResults).where({ ID: id });
+    if (!result) return req.error(404, `AIResult ${id} not found`);
+    return result;
   });
 
 });

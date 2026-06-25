@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useTenders } from './hooks/useTenders.js';
-import { downloadTender, deleteTender } from './api/tenderApi.js';
+import { downloadTender, deleteTender, getTenderDocuments } from './api/tenderApi.js';
 import LoginScreen from './components/LoginScreen';
 import DashboardScreen from './components/DashboardScreen';
 import DetailsScreen from './components/DetailsScreen';
@@ -17,11 +18,12 @@ function App() {
   const [chatTenderId,   setChatTenderId]   = useState(null);
   const [chatMode,       setChatMode]       = useState('normal'); // 'normal' | 'followup'
 
+  const queryClient = useQueryClient();
+
   const {
     tenders,
     loading,
     error,
-    refresh,
     handleMarkReviewed,
     handleSaveChanges,
   } = useTenders(user);
@@ -42,18 +44,14 @@ function App() {
   };
 
   // ── Navigation ──────────────────────────────────────────────────────────────
-  const handleShowDetails = async (tender) => {
-    const updated = await handleMarkReviewed(tender);
-    setSelectedTender(updated);
+  const handleShowDetails = (tender) => {
+    setSelectedTender(tender);
     setIsDetailsPreEditing(false);
     setScreen('details');
-  };
-
-  const handleEditDetails = async (tender) => {
-    const updated = await handleMarkReviewed(tender);
-    setSelectedTender(updated);
-    setIsDetailsPreEditing(true);
-    setScreen('details');
+    // Mark reviewed in background — don't block navigation
+    handleMarkReviewed(tender)
+      .then(updated => setSelectedTender(prev => prev?.id === updated.id ? updated : prev))
+      .catch(() => {});
   };
 
   // ── Open chatbot for a specific tender row (or globally) ────────────────────
@@ -72,12 +70,20 @@ function App() {
   // ── Save changes ────────────────────────────────────────────────────────────
   const onSaveChanges = async (tenderId, updatedFormValues, changedList, remarksObject) => {
     try {
-      const updated = await handleSaveChanges(tenderId, updatedFormValues, changedList, remarksObject);
-      setSelectedTender(updated);
+      await handleSaveChanges(tenderId, updatedFormValues, changedList, remarksObject);
+      const updated = queryClient.getQueryData(['tenders'])?.find(t => t.id === tenderId);
+      if (updated) setSelectedTender(updated);
     } catch (err) {
       console.error('Save failed:', err);
     }
   };
+
+  const handlePrefetchDocuments = (tenderId) =>
+    queryClient.prefetchQuery({
+      queryKey: ['tender', tenderId, 'documents'],
+      queryFn: () => getTenderDocuments(tenderId),
+      staleTime: 5 * 60 * 1000,
+    });
 
   const handleDownloadDetails = async (tender) => {
     try {
@@ -92,7 +98,7 @@ function App() {
     if (!window.confirm(`Delete tender "${label}"? This cannot be undone.`)) return;
     try {
       await deleteTender(tender.id);
-      refresh();
+      queryClient.invalidateQueries({ queryKey: ['tenders'] });
       setScreen('dashboard');
     } catch (err) {
       alert('Delete failed: ' + err.message);
@@ -118,6 +124,8 @@ function App() {
               onShowDetails={handleShowDetails}
               onOpenChat={handleOpenChat}
               onOpenFollowUp={handleOpenFollowUp}
+              onPrefetchDocuments={handlePrefetchDocuments}
+              onDelete={handleDelete}
             />
           )}
 
@@ -129,7 +137,6 @@ function App() {
               onSaveChanges={onSaveChanges}
               onOpenChat={() => handleOpenChat(selectedTender)}
               onDownload={handleDownloadDetails}
-              onDelete={handleDelete}
             />
           )}
 
@@ -154,7 +161,12 @@ function App() {
             isOpen={isChatOpen}
             onClose={() => setIsChatOpen(false)}
             tenderId={chatTenderId}
-            onUploadComplete={refresh}
+            onUploadComplete={() => {
+                queryClient.invalidateQueries({ queryKey: ['tenders'] });
+                if (chatTenderId) {
+                  queryClient.invalidateQueries({ queryKey: ['tender', chatTenderId, 'documents'] });
+                }
+              }}
             mode={chatMode}
             setMode={setChatMode}
             tenders={tenders}

@@ -1,71 +1,107 @@
-/**
- * hooks/useTenders.js
- *
- * Custom hook encapsulating all Tender data management.
- * Replaces the raw useState(INITIAL_TENDERS) in App.jsx.
- *
- * Usage:
- *   const { tenders, loading, error, refresh, handleSaveChanges, handleMarkReviewed } = useTenders(username);
- */
-
-import { useState, useEffect, useCallback } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getTenders,
   updateTender,
   markReviewed,
   submitAuditBatch,
 } from '../api/tenderApi.js';
-import { INITIAL_TENDERS } from '../data.js';
 
 export function useTenders(username) {
-  const [tenders,  setTenders]  = useState([]);
-  const [loading,  setLoading]  = useState(true);
-  const [error,    setError]    = useState(null);
+  const queryClient = useQueryClient();
 
-  // ── Fetch all tenders ────────────────────────────────────────────────────────
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await getTenders();
-      setTenders(data);
-    } catch (err) {
-      setError(err.message || 'Failed to load tenders');
-      setTenders(INITIAL_TENDERS);   // show example data when backend is unavailable
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  // ── List query ──────────────────────────────────────────────────────────────
+  const { data: tenders = [], isLoading: loading, error: queryError } = useQuery({
+    queryKey: ['tenders'],
+    queryFn: getTenders,
+    enabled: !!username,  // don't fetch before login
+  });
 
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
+  // ── markReviewed mutation ───────────────────────────────────────────────────
+  const markReviewedMutation = useMutation({
+    mutationFn: ({ id }) => markReviewed(id, username),
+    onMutate: async ({ id }) => {
+      await queryClient.cancelQueries({ queryKey: ['tenders'] });
+      const prev = queryClient.getQueryData(['tenders']) || [];
+      // Optimistic: stamp the reviewer immediately
+      queryClient.setQueryData(['tenders'],
+        prev.map(t => t.id === id ? { ...t, lastReviewedBy: username } : t)
+      );
+      return { prev };
+    },
+    onError: (_, __, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(['tenders'], ctx.prev);
+    },
+    onSuccess: (_, { id }) => {
+      // Optimistic update already stamped lastReviewedBy — sync to detail cache
+      const updated = queryClient.getQueryData(['tenders'])?.find(t => t.id === id);
+      if (updated) queryClient.setQueryData(['tender', id], updated);
+    },
+  });
 
-  // ── Mark reviewed (called when clicking View/Edit in Dashboard) ───────────────
-  const handleMarkReviewed = useCallback(async (tender) => {
-    if (!username) return tender;
-    try {
-      const updated = await markReviewed(tender.id, username);
-      setTenders(prev => prev.map(t => t.id === updated.id ? updated : t));
-      return updated;
-    } catch (err) {
-      console.error('markReviewed failed:', err);
-      // Optimistic fallback so UI doesn't break
-      const optimistic = { ...tender, lastReviewedBy: username };
-      setTenders(prev => prev.map(t => t.id === tender.id ? optimistic : t));
-      return optimistic;
-    }
-  }, [username]);
+  // ── saveChanges mutation ────────────────────────────────────────────────────
+  const saveChangesMutation = useMutation({
+    mutationFn: ({ tenderId, updatedFormValues }) =>
+      updateTender(tenderId, updatedFormValues, username),
+    onMutate: async ({ tenderId, updatedFormValues }) => {
+      await queryClient.cancelQueries({ queryKey: ['tenders'] });
+      const prev = queryClient.getQueryData(['tenders']) || [];
+      queryClient.setQueryData(['tenders'], old =>
+        (old || []).map(t =>
+          t.id === tenderId
+            ? {
+                ...t,
+                title: updatedFormValues.title,
+                details: {
+                  budget:     updatedFormValues.budget,
+                  deadline:   updatedFormValues.deadline,
+                  status:     updatedFormValues.status,
+                  location:   updatedFormValues.location,
+                  contractor: updatedFormValues.contractor,
+                },
+              }
+            : t
+        )
+      );
+      return { prev };
+    },
+    onError: (_, __, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(['tenders'], ctx.prev);
+    },
+    onSuccess: (_, { tenderId, updatedFormValues }) => {
+      queryClient.setQueryData(['tenders'], old =>
+        (old || []).map(t => t.id === tenderId
+          ? {
+              ...t,
+              title:         updatedFormValues.title,
+              lastChangedBy: username,
+              details: {
+                budget:     updatedFormValues.budget,
+                deadline:   updatedFormValues.deadline,
+                status:     updatedFormValues.status,
+                location:   updatedFormValues.location,
+                contractor: updatedFormValues.contractor,
+              },
+            }
+          : t
+        )
+      );
+      const updated = queryClient.getQueryData(['tenders'])?.find(t => t.id === tenderId);
+      if (updated) queryClient.setQueryData(['tender', tenderId], updated);
+    },
+  });
 
-  // ── Save changes + post audit entries ────────────────────────────────────────
-  const handleSaveChanges = useCallback(async (tenderId, updatedFormValues, changedList, remarksObject) => {
-    // 1. PATCH the tender — throws on failure so caller can display the error
-    const updated = await updateTender(tenderId, updatedFormValues, username);
+  // ── Public API (same interface as before) ───────────────────────────────────
 
-    // 2. Update local state immediately (PATCH succeeded)
-    setTenders(prev => prev.map(t => t.id === updated.id ? updated : t));
+  const handleMarkReviewed = async (tender) => {
+    await markReviewedMutation.mutateAsync({ id: tender.id });
+    return (
+      queryClient.getQueryData(['tenders'])?.find(t => t.id === tender.id)
+      ?? { ...tender, lastReviewedBy: username }
+    );
+  };
 
-    // 3. Post audit entries — best-effort; failure doesn't roll back the PATCH
+  const handleSaveChanges = async (tenderId, updatedFormValues, changedList, remarksObject) => {
+    await saveChangesMutation.mutateAsync({ tenderId, updatedFormValues });
     if (changedList.length > 0) {
       try {
         await submitAuditBatch(tenderId, changedList, remarksObject, username);
@@ -73,9 +109,13 @@ export function useTenders(username) {
         console.error('Audit batch failed after successful save:', auditErr);
       }
     }
+  };
 
-    return updated;
-  }, [username]);
-
-  return { tenders, loading, error, refresh, handleMarkReviewed, handleSaveChanges };
+  return {
+    tenders,
+    loading,
+    error: queryError?.message || null,
+    handleMarkReviewed,
+    handleSaveChanges,
+  };
 }

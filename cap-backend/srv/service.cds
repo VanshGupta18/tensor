@@ -3,6 +3,9 @@ using com.tenderflow as db from '../db/schema';
 // ─────────────────────────────────────────────────
 // TenderService  – exposed over /odata/v4/tender
 // ─────────────────────────────────────────────────
+// With dummy auth (dev) all users satisfy 'authenticated-user'.
+// In production, switch package.json auth.kind to 'xsuaa' and bind the XSUAA service instance.
+@requires: 'authenticated-user'
 service TenderService @(path: '/odata/v4/tender') {
 
     // ── Tender CRUD ──────────────────────────────
@@ -18,10 +21,10 @@ service TenderService @(path: '/odata/v4/tender') {
     entity TenderAudits as projection on db.TenderAudits;
 
     // ── Documents ─────────────────────────────────
-    entity Documents   as projection on db.Documents excluding { content };
+    entity Documents   as projection on db.Documents;
 
     // ── AI Results ───────────────────────────────
-    entity AIResults   as projection on db.AIResults excluding { pdfContent };
+    entity AIResults   as projection on db.AIResults;
 
     // ── Chat History ─────────────────────────────
     entity ChatHistories as projection on db.ChatHistories;
@@ -31,7 +34,9 @@ service TenderService @(path: '/odata/v4/tender') {
     /**
      * Authenticate a user against stored credentials.
      * Returns username + role on success or throws 401.
+     * Intentionally public (@requires: null) so the login page can call it unauthenticated.
      */
+    @(requires: null)
     action login(username: String, password: String) returns {
         username: String;
         role    : String;
@@ -97,4 +102,21 @@ service TenderService @(path: '/odata/v4/tender') {
     action generatePDF(
         tenderId : String
     ) returns String;   // base64-encoded PDF
+
+    /**
+     * Fetch full AIResult detail including rawResponse (LargeString).
+     * Intentionally a separate action so list queries on AIResults stay lightweight.
+     */
+    action getAIResultDetail(
+        id : String
+    ) returns AIResults;
+
+    /**
+     * Correct a tender's version to the value extracted from its source PDF.
+     * Use this once to fix stale versions left by the old auto-increment bug.
+     */
+    action correctTenderVersion(
+        tenderId : String,
+        version  : Integer
+    ) returns String;
 }

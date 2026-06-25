@@ -5,6 +5,7 @@
     "@cap-js/hana": "^2",
     "@sap/cds": "^9",
     "axios": "^1.18.0",
+    "express-rate-limit": "^7",
     "form-data": "^4.0.6",
     "multer": "^2.2.0"
   },
@@ -32,10 +33,11 @@
       "db": {
         "kind": "hana-cloud",
         "pool": {
-          "min": 2,
-          "max": 10,
-          "acquireTimeoutMillis": 60000,
-          "idleTimeoutMillis": 30000
+          "min": 5,
+          "max": 50,
+          "acquireTimeoutMillis": 30000,
+          "idleTimeoutMillis": 60000,
+          "evictionRunIntervalMillis": 10000
         }
       },
       "auth": {

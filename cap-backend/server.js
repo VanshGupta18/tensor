@@ -12,6 +12,27 @@
 
 const cds    = require('@sap/cds');
 const multer = require('multer');
+const rateLimit = require('express-rate-limit');
+
+// 10 uploads per user per 15 minutes — prevents AI cost abuse and HANA saturation
+const uploadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: (req) => req.ip,
+  message: { error: 'Too many uploads. Try again in 15 minutes.' },
+});
+
+// 60 chat messages per user per minute — keeps Bedrock cost predictable
+const chatLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 60,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: (req) => req.ip,
+  message: { error: 'Too many chat requests. Slow down.' },
+});
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -26,7 +47,10 @@ cds.on('listening', ({ server }) => {
 });
 
 cds.on('bootstrap', (app) => {
-  app.post('/upload', upload.single('invoice'), async (req, res) => {
+  // Apply chat rate limiter before CAP routes are registered
+  app.use('/odata/v4/tender/chat', chatLimiter);
+
+  app.post('/upload', uploadLimiter, upload.single('invoice'), async (req, res) => {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded. Field name must be "invoice".' });
     }
@@ -40,7 +64,11 @@ cds.on('bootstrap', (app) => {
 
       // Dispatch to the CDS service action — local function call, not HTTP
       const srv    = await cds.connect.to('TenderService');
-      const result = await srv.send('processFile', {
+      
+      // Since /upload is an Express route outside of OData, it lacks CAP's req.user
+      // We must provide a privileged user context to bypass @requires: 'authenticated-user'
+      const contextUser = new cds.User.Privileged('system');
+      const result = await srv.tx({ user: contextUser }).send('processFile', {
         tenderId,
         filename: file.originalname,
         content:  base64Content,
@@ -49,8 +77,8 @@ cds.on('bootstrap', (app) => {
 
       res.json({ value: result });
     } catch (err) {
-      console.error('[/upload]', err.message);
-      res.status(500).json({ error: err.message || 'Upload failed' });
+      console.error('[/upload]', err.stack);
+      res.status(500).json({ error: err.message || 'Upload failed', stack: err.stack });
     }
   });
 });

@@ -59,45 +59,22 @@ export function useTenders(username) {
 
   // ── Save changes + post audit entries ────────────────────────────────────────
   const handleSaveChanges = useCallback(async (tenderId, updatedFormValues, changedList, remarksObject) => {
-    try {
-      // 1. PATCH the tender
-      const updated = await updateTender(tenderId, updatedFormValues, username);
+    // 1. PATCH the tender — throws on failure so caller can display the error
+    const updated = await updateTender(tenderId, updatedFormValues, username);
 
-      // 2. Post audit entries for each changed field
-      if (changedList.length > 0) {
+    // 2. Update local state immediately (PATCH succeeded)
+    setTenders(prev => prev.map(t => t.id === updated.id ? updated : t));
+
+    // 3. Post audit entries — best-effort; failure doesn't roll back the PATCH
+    if (changedList.length > 0) {
+      try {
         await submitAuditBatch(tenderId, changedList, remarksObject, username);
+      } catch (auditErr) {
+        console.error('Audit batch failed after successful save:', auditErr);
       }
-
-      // 3. Update local state
-      setTenders(prev => prev.map(t => t.id === updated.id ? updated : t));
-      return updated;
-    } catch (err) {
-      console.error('handleSaveChanges failed:', err);
-      // Optimistic fallback
-      const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 16);
-      setTenders(prev => prev.map(t => {
-        if (t.id !== tenderId) return t;
-        const newRemarks = [...t.remarks];
-        changedList.forEach(change => {
-          newRemarks.push({
-            fieldName: change.field,
-            oldVal:    change.oldVal,
-            newVal:    change.newVal,
-            remark:    remarksObject[change.field] || 'No remarks provided',
-            changedBy: username,
-            changedAt: timestamp,
-          });
-        });
-        return {
-          ...t,
-          title:         updatedFormValues.title,
-          lastChangedBy: username,
-          details:       { ...t.details, ...updatedFormValues },
-          remarks:       newRemarks,
-        };
-      }));
-      throw err;
     }
+
+    return updated;
   }, [username]);
 
   return { tenders, loading, error, refresh, handleMarkReviewed, handleSaveChanges };

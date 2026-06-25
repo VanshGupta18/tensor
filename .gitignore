@@ -1,13 +1,19 @@
 # Node
 node_modules/
 npm-debug.log*
+yarn-error.log*
+*.log
 
 # Python
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
 .venv/
 *.egg-info/
+.pytest_cache/
+coverage/
+.coverage
 
 # Build artifacts
 dist/
@@ -18,6 +24,7 @@ mta_archives/
 
 # Secrets / local config
 .env
+.env.*
 default-env.json
 
 # DB
@@ -26,8 +33,22 @@ default-env.json
 # OS
 .DS_Store
 Thumbs.db
+*.swp
+*.bak
 
 # Uploads (ephemeral)
-python-ai-service/uploads/*.pdf
-python-ai-service/uploads/*.PDF
-python-ai-service/uploads/*_split/
+python-ai-service/uploads/
+python-ai-service/test_output*.pdf
+
+# Documents / local files
+*.docx
+*.pdf
+TASK.txt
+
+# IDE / tooling
+.claude
+.cursor
+/graphify-out
+CLAUDE.md
+
+docs/

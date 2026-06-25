@@ -79,7 +79,13 @@ function App() {
     }
   };
 
-  const handleDownloadDetails = (tender) => downloadTender(tender);
+  const handleDownloadDetails = async (tender) => {
+    try {
+      await downloadTender(tender);
+    } catch (err) {
+      alert(err.message);
+    }
+  };
 
   const handleDelete = async (tender) => {
     const label = tender.tenderNo || tender.id;

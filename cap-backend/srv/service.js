@@ -242,8 +242,8 @@ module.exports = cds.service.impl(async function (srv) {
   // ── Action: login ────────────────────────────────────────────────────────────
   // Simple credential store — replace with XSUAA in production.
   const USERS = {
-    admin   : { password: 'admin123', role: 'admin' },
-    reviewer: { password: 'review123', role: 'reviewer' },
+    admin   : { password: process.env.ADMIN_PASSWORD    || 'admin123',   role: 'admin' },
+    reviewer: { password: process.env.REVIEWER_PASSWORD || 'review123', role: 'reviewer' },
   };
 
   srv.on('login', async (req) => {
@@ -283,6 +283,7 @@ module.exports = cds.service.impl(async function (srv) {
     const { tenderId, filename, content, mimeType } = req.data;
     const uploadedAt = new Date().toISOString();
     const uploadedBy = req.user?.id || 'unknown';
+    const contentBuffer = Buffer.isBuffer(content) ? content : Buffer.from(content, 'base64');
 
     // 1. Forward raw bytes to Python AI service
     let pyTenders = null;  // array from Python: [{ confidenceScore, summary, keyTerms, sections }]
@@ -293,14 +294,11 @@ module.exports = cds.service.impl(async function (srv) {
       try {
         const FormData = require('form-data');
         const form = new FormData();
-        const buffer = Buffer.isBuffer(content)
-          ? content
-          : Buffer.from(content, 'base64');
-        form.append('invoice', buffer, { filename, contentType: mimeType || 'application/octet-stream' });
+        form.append('invoice', contentBuffer, { filename, contentType: mimeType || 'application/octet-stream' });
 
         const pyRes = await axios.post(`${PYTHON_AI_URL}/process_file`, form, {
           headers: form.getHeaders(),
-          timeout: 300_000
+          timeout: 600_000
         });
         pyTenders = pyRes.data?.tenders || null;
       } catch (err) {
@@ -325,7 +323,7 @@ module.exports = cds.service.impl(async function (srv) {
       const docId = cds.utils.uuid();
       await INSERT.into(Documents).entries({
         ID: docId, tender_ID: tenderId || null, filename,
-        mimeType: mimeType || 'application/octet-stream', content, uploadedBy, uploadedAt
+        mimeType: mimeType || 'application/octet-stream', uploadedBy, uploadedAt
       });
       return JSON.stringify({
         results: [],
@@ -338,7 +336,7 @@ module.exports = cds.service.impl(async function (srv) {
       const docId = cds.utils.uuid();
       await INSERT.into(Documents).entries({
         ID: docId, tender_ID: tenderId || null, filename,
-        mimeType: mimeType || 'application/octet-stream', content, uploadedBy, uploadedAt
+        mimeType: mimeType || 'application/octet-stream', uploadedBy, uploadedAt
       });
       return JSON.stringify({ results: [], message: 'No tender information found in the document.' });
     }
@@ -428,22 +426,28 @@ module.exports = cds.service.impl(async function (srv) {
       if (!existingTender) {
         // ── Branch A: genuinely new tender (no match by tenderNo OR passed ID) ─
         isNew = true;
-        resultTenderId = await getNextTenderId();
-
-        await INSERT.into(Tenders).entries({
-          ID:            resultTenderId,
-          tenderNo:      extractedTenderNo || '',
-          version:       extractedVersion,
-          title:         extractedTitle,
-          budget:        extractedBudget  || 'TBD',
-          deadline:      extractedDeadline || null,
-          status:        'Draft',
-          location:      extractedLocation || '',
-          contractor:    'Not Selected',
-          createdBy:     uploadedBy,
-          lastReviewedBy: '-',
-          lastChangedBy:  uploadedBy,
-        });
+        for (let attempt = 0; attempt < 5; attempt++) {
+          resultTenderId = await getNextTenderId();
+          try {
+            await INSERT.into(Tenders).entries({
+              ID:            resultTenderId,
+              tenderNo:      extractedTenderNo || '',
+              version:       extractedVersion,
+              title:         extractedTitle,
+              budget:        extractedBudget  || 'TBD',
+              deadline:      extractedDeadline || null,
+              status:        'Draft',
+              location:      extractedLocation || '',
+              contractor:    'Not Selected',
+              createdBy:     uploadedBy,
+              lastReviewedBy: '-',
+              lastChangedBy:  uploadedBy,
+            });
+            break;
+          } catch (insertErr) {
+            if (attempt === 4) throw insertErr;
+          }
+        }
 
       } else {
         // ── Branch B: duplicate found — always ask user to confirm ────────────
@@ -451,7 +455,6 @@ module.exports = cds.service.impl(async function (srv) {
 
         // Show all extracted fields (existing vs new) so user can decide
         const allFields = [
-          { field: 'Tender No', dbKey: 'tenderNo', newVal: extractedTenderNo },
           { field: 'Title',    dbKey: 'title',    newVal: extractedTitle },
           { field: 'Budget',   dbKey: 'budget',   newVal: extractedBudget },
           { field: 'Deadline', dbKey: 'deadline', newVal: extractedDeadline },
@@ -474,7 +477,7 @@ module.exports = cds.service.impl(async function (srv) {
       // Save document linked to this tender
       await INSERT.into(Documents).entries({
         ID: docId, tender_ID: resultTenderId, filename,
-        mimeType: mimeType || 'application/octet-stream', content, uploadedBy, uploadedAt
+        mimeType: mimeType || 'application/octet-stream', uploadedBy, uploadedAt
       });
 
       // Generate PDF synopsis via Python and save alongside the JSON
@@ -538,13 +541,25 @@ module.exports = cds.service.impl(async function (srv) {
   // Called by React after the user confirms a duplicate-update prompt.
   srv.on('applyTenderUpdate', async (req) => {
     const { tenderId, patch, changedFields } = req.data;
-    const patchObj        = JSON.parse(patch);
-    const changedFieldsArr = JSON.parse(changedFields);
+
+    let patchObj, changedFieldsArr;
+    try {
+      patchObj         = JSON.parse(patch);
+      changedFieldsArr = JSON.parse(changedFields);
+    } catch (e) {
+      return req.error(400, `Invalid JSON: ${e.message}`);
+    }
+    if (!Array.isArray(changedFieldsArr)) return req.error(400, 'changedFields must be a JSON array');
+
+    const ALLOWED_PATCH_KEYS = ['title', 'budget', 'deadline', 'location', 'lastChangedBy'];
+    const safePatch = Object.fromEntries(
+      Object.entries(patchObj).filter(([k]) => ALLOWED_PATCH_KEYS.includes(k))
+    );
 
     const tender = await SELECT.one.from(Tenders).where({ ID: tenderId });
     if (!tender) return req.error(404, `Tender ${tenderId} not found`);
 
-    await UPDATE(Tenders).set(patchObj).where({ ID: tenderId });
+    await UPDATE(Tenders).set(safePatch).where({ ID: tenderId });
 
     for (const { field, oldVal, newVal } of changedFieldsArr) {
       await INSERT.into(TenderAudits).entries({
@@ -554,7 +569,7 @@ module.exports = cds.service.impl(async function (srv) {
         oldVal,
         newVal,
         remark:    'Updated from PDF upload (user confirmed)',
-        changedBy: patchObj.lastChangedBy || 'unknown',
+        changedBy: safePatch.lastChangedBy || 'unknown',
         changedAt: new Date().toISOString(),
       });
     }
@@ -581,7 +596,7 @@ module.exports = cds.service.impl(async function (srv) {
     await INSERT.into(ChatHistories).entries({
       ID: cds.utils.uuid(),
       tender_ID: tenderId || null,
-      sender: sender || 'user',
+      sender: 'user',
       message,
       timestamp
     });
@@ -682,4 +697,3 @@ module.exports = cds.service.impl(async function (srv) {
   });
 
 });
-

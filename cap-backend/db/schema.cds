@@ -78,6 +78,6 @@ entity AIResults : cuid {
 entity ChatHistories : cuid {
     tender    : Association to Tenders;
     sender    : String(10);                 // 'user' | 'bot'
-    message   : String(5000);
+    message   : LargeString;
     timestamp : Timestamp;
 }

@@ -1,6 +1,6 @@
 """
 pdf_generator.py
-─────────────────
+ ─────────────────
 Renders a Tender Synopsis PDF that mirrors the DOCX template:
   - Navy title banner with org name, tender number, version and date
   - Numbered sections with column-header rows ("Parameter | Details", etc.)
@@ -14,6 +14,7 @@ Output: PDF bytes (ReportLab — no system dependencies).
 """
 
 import html
+import re
 from io import BytesIO
 
 from reportlab.lib import colors
@@ -262,6 +263,11 @@ def _emit_table(rows: list, page_w: float, depth: int, has_header: bool) -> list
     return [tbl, Spacer(1, 4)]
 
 
+def _is_list_like(text: str) -> bool:
+    """True if content looks like a comma/semicolon/newline-separated list."""
+    return text.count(",") >= 3 or text.count(";") >= 2 or text.count("\n") >= 2
+
+
 def _build_section_table(sub_headings: list, styles, page_w: float,
                          col_headers=None, depth: int = 0) -> list:
     """
@@ -309,6 +315,7 @@ def _build_section_table(sub_headings: list, styles, page_w: float,
         else:
             if not content:
                 continue  # Skip rows with no extracted content
+            
             # Long content can't fit in a table cell — a single row taller than
             # the page frame causes ReportLab to crash. Render as label + paragraph.
             if len(content) > 600:
@@ -321,9 +328,18 @@ def _build_section_table(sub_headings: list, styles, page_w: float,
                          Paragraph(col_headers[1], styles["ColHeader"])]
                     ] if col_headers else [])
                 flowables.append(Paragraph(f"<b>{_safe(label)}</b>", styles["SubLabel"]))
-                flowables.append(Paragraph(_safe(content).replace("\n", "<br/>"), styles["BodyPara"]))
+                if _is_list_like(content):
+                    items = [i.strip() for i in re.split(r"[,;\n]+", content) if i.strip()]
+                    for item in items:
+                        flowables.append(Paragraph(f"• {_safe(item)}", styles["BulletItem"]))
+                else:
+                    flowables.append(Paragraph(_safe(content).replace("\n", "<br/>"), styles["BodyPara"]))
             else:
-                cell_content = _safe(content).replace("\n", "<br/>")
+                if _is_list_like(content):
+                    items = [i.strip() for i in re.split(r"[,;\n]+", content) if i.strip()]
+                    cell_content = "<br/>".join(f"• {_safe(i)}" for i in items)
+                else:
+                    cell_content = _safe(content).replace("\n", "<br/>")
                 rows.append([
                     Paragraph(_safe(label), styles["CellLabel"]),
                     Paragraph(cell_content, styles["CellValue"]),

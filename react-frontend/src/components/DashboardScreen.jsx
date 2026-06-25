@@ -53,7 +53,7 @@ export default function DashboardScreen({
           <h1>TenderFlow Dashboard</h1>
           <div className="nav-actions">
             <div className="user-badge">
-              <div className="user-avatar">{username.charAt(0).toUpperCase()}</div>
+              <div className="user-avatar">{username ? username.charAt(0).toUpperCase() : '?'}</div>
               {username}
             </div>
             <button onClick={onLogout} className="btn btn-ghost" style={{ color: 'var(--danger)' }}>
@@ -164,7 +164,7 @@ export default function DashboardScreen({
           <div className="data-table-container" style={{ padding: '20px' }}>
             {loading && (
               <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
-                Loading Tenders . . .
+                Loading tenders from CAP backend…
               </div>
             )}
 

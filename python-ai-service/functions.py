@@ -2,6 +2,7 @@ import requests
 import os
 import copy
 import base64
+import time
 from io import BytesIO
 from pypdf import PdfReader, PdfWriter
 import json
@@ -45,13 +46,28 @@ def split_pdf(input_pdf: str, pages_per_file: int):
 
 
 def parse_ai_json(ai_text: str) -> dict:
-    # Remove ```json ... ``` or ``` ... ```
-    cleaned = re.sub(r"^```json\s*|^```\s*|```$", "", ai_text.strip(), flags=re.MULTILINE)
-
+    text = ai_text.strip()
+    # Strip opening code fence
+    text = re.sub(r"^```(?:json)?\s*\n?", "", text, flags=re.MULTILINE)
+    # Find the outermost JSON object or array and discard anything outside it
+    # (handles trailing text / notes the model appends after the closing fence)
+    obj_start  = text.find('{')
+    arr_start  = text.find('[')
+    if obj_start == -1 and arr_start == -1:
+        raise ValueError(f"No JSON object found in AI response.\n\nRaw:\n{text[:500]}")
+    if obj_start == -1 or (arr_start != -1 and arr_start < obj_start):
+        start, end_char = arr_start, ']'
+    else:
+        start, end_char = obj_start, '}'
+    end = text.rfind(end_char)
+    if end == -1 or end < start:
+        raise ValueError(f"Malformed JSON (no closing '{end_char}') in AI response.\n\nRaw:\n{text[:500]}")
+    text = text[start:end + 1]
     try:
-        return json.loads(cleaned)
+        return json.loads(text)
     except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON from AI: {e}\n\nRaw:\n{cleaned}")
+        raise ValueError(f"Invalid JSON from AI: {e}\n\nRaw:\n{text[:500]}")
+
 
 def get_access_token(cred):
     data1 = {
@@ -66,6 +82,7 @@ def get_access_token(cred):
     resp.raise_for_status()
     token_payload = resp.json()
     return token_payload["access_token"]
+
 def get_or_create_section(result_dict, section_name):
 
     sections = result_dict.setdefault("sections", [])
@@ -83,26 +100,43 @@ def get_or_create_section(result_dict, section_name):
     result_dict["sections"] = sections
     return result_dict,new_section
 
-def get_result(token, API_URL, payload):
-    """
-    Generic LLM call that prepends chat history to the payload messages.
-    NOTE: token expected to be a tuple (access_token, expires_in) → we use token[0].
-    """
+
+def get_result(token, API_URL, payload, retries=3):
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
         "Accept": "application/json",
         "AI-Resource-Group": "grounding",
     }
-    
-    try:
-        resp = requests.post(API_URL, json=payload, headers=headers, timeout=600)
-        resp.raise_for_status()
-        print("result generate")
-    except requests.exceptions.HTTPError as e:
-        print("HTTPError:", str(e))
-        raise
-    return (resp.json())["content"][0]["text"]
+
+    last_exc = None
+    for attempt in range(retries):
+        try:
+            resp = requests.post(API_URL, json=payload, headers=headers, timeout=600)
+            resp.raise_for_status()
+            print("result generated")
+            # Defensive: guard against unexpected API response shapes
+            response_json = resp.json()
+            content_list = response_json.get("content")
+            if not content_list or not isinstance(content_list, list):
+                raise ValueError(f"Unexpected API response shape: {list(response_json.keys())}")
+            first = content_list[0]
+            text = first.get("text") if isinstance(first, dict) else None
+            if not text:
+                raise ValueError(f"No 'text' in API content item: {first}")
+            return text
+        except requests.exceptions.HTTPError as e:
+            last_exc = e
+            if resp.status_code >= 500 and attempt < retries - 1:
+                wait = 2 ** attempt  # 1s, 2s, 4s
+                print(f"[retry {attempt + 1}/{retries}] HTTP {resp.status_code} — retrying in {wait}s...")
+                time.sleep(wait)
+                continue
+            print("HTTPError:", str(e))
+            raise
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("get_result: no attempts made (retries must be >= 1)")
 
 
 def reading_file(file_path):
@@ -123,11 +157,15 @@ def generate_payload(encoded, summary):
 
             MANDATORY RULES:
 
-            1. Exact Extraction Only
+            1. Extraction Rules
             - Extract values only if they are explicitly and clearly present in the document.
-            - Copy values exactly as they appear, preserving original format, units, wording, and formatting wherever possible.
-            - Do not rephrase extracted content.
-            - Do not convert values into different formats.
+            - For factual values (dates, numbers, percentages, codes, names, amounts, formulas, identifiers):
+              copy exactly as they appear in the document.
+            - For narrative or legal text (clause descriptions, conditions, general statements):
+              summarize to one short phrase that preserves all key facts (numbers, percentages, conditions).
+              Example: "0.15%/week, capped at 5% of Contract Price" instead of copying the full GCC clause.
+            - Target: each field value should be under 200 characters where possible.
+            - Do not convert factual values into different formats.
 
             2. No Guessing or Inference
             - Do not calculate, derive, estimate, or infer values.
@@ -159,9 +197,10 @@ def generate_payload(encoded, summary):
             - These fields are domain dependent.
             - Do not assume predefined categories or subfields.
             - Do not create additional JSON structure under these fields.
-            - Extract all explicitly available information related to components or materials.
-            - Preserve maximum factual detail.
-            - Capture names, descriptions, quantities, specifications, capacities, formulae, clauses, schedules, references and requirements.
+            - Extract as a concise comma-separated list of named items (component names, material names,
+              kV levels, ratings, quantities, specifications). No full sentences or clause text.
+              Example: "11 kV substations, 33 kV feeders, ACSR conductors, RMUs, capacitor banks"
+            - Preserve: item names, quantities, ratings, kV levels, percentages, codes.
             - Do not invent categories.
 
             7. Token Management and Controlled Compression
@@ -496,25 +535,23 @@ def generate_payload_result(summary):
 
     return payload
 
-import json
-def add_subheading(result_dict,section, heading, content):
+def add_subheading(result_dict, section, heading, content):
     if not content or not str(content).strip():
-        content = " "
+        return result_dict  # Don't inject empty long-fields content
 
-    sub_headings = section.setdefault(
-        "sub_headings",
-        []
-    )
+    sub_headings = section.setdefault("sub_headings", [])
 
-    sub_headings.append(
-        {
-            "heading": heading,
-            "content": str(content)
-        }
-    )
-    section_heading=section["heading"]
-    for i in range(0,len(result_dict["sections"])):
-        if result_dict["sections"][i]["heading"]==section_heading:
+    # Update existing sub_heading if already present, otherwise append
+    for sh in sub_headings:
+        if sh.get("heading") == heading:
+            sh["content"] = str(content)
+            break
+    else:
+        sub_headings.append({"heading": heading, "content": str(content)})
+
+    section_heading = section["heading"]
+    for i in range(len(result_dict["sections"])):
+        if result_dict["sections"][i]["heading"] == section_heading:
             result_dict["sections"][i]["sub_headings"] = sub_headings
             return result_dict
 
@@ -586,8 +623,9 @@ def _merge_into(base, update, accumulated, prefix=""):
                     if v not in accumulated[dot_key]:
                         accumulated[dot_key].append(v)
             else:
-                # First non-empty value wins
-                if not base.get(key) and val and str(val).strip():
+                # First non-empty value wins (use explicit sentinel check to avoid
+                # falsy-zero overwriting a legitimately-set 0 or False)
+                if base.get(key) in (None, "", [], {}) and val and str(val).strip():
                     base[key] = val
 
 
@@ -609,15 +647,18 @@ def _render_pages_as_images(file_path: str, dpi: int = 110, max_pages: int = 20)
     if not _FITZ_AVAILABLE:
         raise RuntimeError("pymupdf not installed — cannot process image-based PDF")
     doc = fitz.open(file_path)
-    mat = fitz.Matrix(dpi / 72, dpi / 72)
-    images = []
-    for i, page in enumerate(doc):
-        if i >= max_pages:
-            break
-        pix = page.get_pixmap(matrix=mat)
-        img_bytes = pix.tobytes("jpeg", jpg_quality=75)
-        images.append(base64.b64encode(img_bytes).decode("utf-8"))
-    return images
+    try:
+        mat = fitz.Matrix(dpi / 72, dpi / 72)
+        images = []
+        for i, page in enumerate(doc):
+            if i >= max_pages:
+                break
+            pix = page.get_pixmap(matrix=mat)
+            img_bytes = pix.tobytes("jpeg", jpg_quality=75)
+            images.append(base64.b64encode(img_bytes).decode("utf-8"))
+        return images
+    finally:
+        doc.close()
 
 
 def generate_payload_vision(images_b64: list, summary: str) -> dict:
@@ -632,10 +673,16 @@ def generate_payload_vision(images_b64: list, summary: str) -> dict:
 You are a strict data extraction system. You are not permitted to generate, infer, estimate, normalize, round off, or assume any values.
 
 Extract values ONLY if they are explicitly and clearly present in the provided page images.
-Copy values exactly as they appear, preserving original format, units, wording, and formatting wherever possible.
 
 MANDATORY RULES:
-1. Exact Extraction Only — do not rephrase, convert formats, or abbreviate.
+1. Extraction Rules
+   - For factual values (dates, numbers, percentages, codes, names, amounts, formulas, identifiers):
+     copy exactly as they appear in the document.
+   - For narrative or legal text (clause descriptions, conditions, general statements):
+     summarize to one short phrase that preserves all key facts (numbers, percentages, conditions).
+     Example: "0.15%/week, capped at 5% of Contract Price" instead of copying the full clause.
+   - Target: each field value should be under 200 characters where possible.
+   - Do not convert factual values into different formats.
 2. No Guessing or Inference — if a field is not visible, leave it as empty string.
 3. No Data Fabrication — do not insert placeholders or default values.
 4. Structure Integrity — maintain the exact JSON structure, do not add or remove keys.
@@ -705,6 +752,7 @@ def generate_summary(token, API_URL, file_path_list):
 
     # Process all chunks in parallel — wall-clock time = slowest single chunk
     max_workers = min(len(file_path_list), 5)
+    success_count = 0
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
             executor.submit(_call_chunk, (token, API_URL, fp)): fp
@@ -714,8 +762,19 @@ def generate_summary(token, API_URL, file_path_list):
             try:
                 chunk_result = future.result()
                 _merge_into(merged, chunk_result, accumulated)
+                success_count += 1
             except Exception as e:
-                print(f"[chunk error] {futures[future]}: {e}")
+                fp = futures[future]
+                if "401" in str(e) or "Unauthorized" in str(e):
+                    print(f"[chunk auth error] {fp}: token expired mid-run — {e}")
+                else:
+                    print(f"[chunk error] {fp}: {e}")
+
+    if success_count == 0:
+        raise RuntimeError(
+            f"All {len(file_path_list)} chunk(s) failed — no data extracted. "
+            "Check AI service connectivity and token validity."
+        )
 
     # Restore concatenated fields
     for dot_key, values in accumulated.items():

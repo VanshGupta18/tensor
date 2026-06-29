@@ -3,15 +3,6 @@ namespace com.tenderflow;
 using { cuid, managed } from '@sap/cds/common';
 
 // ─────────────────────────────────────────────────
-// Users
-// ─────────────────────────────────────────────────
-entity Users : cuid {
-    username : String(100) not null;
-    role     : String(50) default 'user';  // 'admin' | 'user' | 'reviewer'
-    createdAt: Timestamp;
-}
-
-// ─────────────────────────────────────────────────
 // Tenders  (core entity)
 // ─────────────────────────────────────────────────
 entity Tenders : managed {

@@ -335,6 +335,19 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // Reset messages when context changes
+  useEffect(() => {
+    setMessages([
+      {
+        id: Date.now(), // Use unique ID to force re-render if needed
+        text: "Hello! I'm your AI assistant. You can ask me questions about your tenders or upload a PDF document for structured data extraction.",
+        sender: 'bot',
+        type: 'text',
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      }
+    ]);
+  }, [tenderId]);
+
   useEffect(() => {
     if (isOpen && mode === 'followup' && tenderId) {
       setMessages(prev => {
@@ -342,11 +355,14 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
         const hasFollowUpPrompt = prev.some(m => m.isFollowUpPrompt && m.tenderId === tenderId);
         if (hasFollowUpPrompt) return prev;
 
+        const activeT = tenders?.find(t => t.id === tenderId);
+        const label = activeT ? (activeT.tenderNo || tenderId) : tenderId;
+
         return [...prev, {
           id: `followup-${Date.now()}`,
           isFollowUpPrompt: true,
           tenderId,
-          text: `Add a follow-up file for tender **${tenders.find(t => t.id === tenderId)?.tenderNo || tenderId}**:`,
+          text: `Add a follow-up file for tender context **${label}**:`,
           sender: 'bot',
           type: 'followup-request',
           time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -483,11 +499,11 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
             </svg>
             Copilot
-            {tenderId && (
-              <span style={{ fontSize: '12px', opacity: 0.7, marginLeft: '8px' }}>
-                • {tenders.find(t => t.id === tenderId)?.tenderNo || tenderId}
-              </span>
-            )}
+            {tenderId && (() => {
+              const activeT = tenders?.find(t => t.id === tenderId);
+              const label = activeT ? (activeT.tenderNo || tenderId) : tenderId;
+              return <span style={{ fontSize: '12px', opacity: 0.7, marginLeft: '8px' }}>• {label}</span>;
+            })()}
           </h3>
           <button onClick={onClose} className="btn btn-ghost" style={{ padding: '4px 8px' }}>✕</button>
         </div>

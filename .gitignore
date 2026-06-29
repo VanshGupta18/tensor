@@ -52,4 +52,5 @@ TASK.txt
 CLAUDE.md
 
 /docs
-
+*.sqlite*
+xs-security.json

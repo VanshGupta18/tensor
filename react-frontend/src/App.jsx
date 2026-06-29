@@ -8,8 +8,8 @@ import DetailsScreen from './components/DetailsScreen';
 import ChatbotPanel from './components/ChatbotPanel';
 
 function App() {
-  const [user,           setUser]           = useState(null);
-  const [screen,         setScreen]         = useState('login'); // 'login' | 'dashboard' | 'details'
+  const [user,           setUser]           = useState('admin'); // Default local mock user
+  const [screen,         setScreen]         = useState('dashboard'); // bypass login
   const [selectedTender, setSelectedTender] = useState(null);
   const [isDetailsPreEditing, setIsDetailsPreEditing] = useState(false);
 
@@ -29,13 +29,26 @@ function App() {
   } = useTenders(user);
 
   // ── Auth ───────────────────────────────────────────────────────────────────
+  // Restore session on mount
+  React.useEffect(() => {
+    const token = localStorage.getItem('token');
+    const savedUser = localStorage.getItem('username');
+    if (token && savedUser) {
+      setUser(savedUser);
+      setScreen('dashboard');
+    }
+  }, []);
+
   const handleLoginSuccess = (username) => {
     setUser(username);
+    localStorage.setItem('username', username);
     setScreen('dashboard');
   };
 
   const handleLogout = () => {
     setUser(null);
+    localStorage.removeItem('token');
+    localStorage.removeItem('username');
     setScreen('login');
     setIsChatOpen(false);
     setChatTenderId(null);

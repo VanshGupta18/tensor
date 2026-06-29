@@ -9,6 +9,8 @@ using com.tenderflow as db from '../db/schema';
 service TenderService @(path: '/odata/v4/tender') {
 
     // ── Tender CRUD ──────────────────────────────
+    // ── Tender CRUD ──────────────────────────────
+    @requires: 'authenticated-user'
     @odata.draft.enabled
     entity Tenders     as projection on db.Tenders
         actions {
@@ -17,6 +19,8 @@ service TenderService @(path: '/odata/v4/tender') {
         };
 
     // ── Read-only audit log ───────────────────────
+    // ── Read-only audit log ───────────────────────
+    @requires: 'authenticated-user'
     @readonly
     entity TenderAudits as projection on db.TenderAudits;
 
@@ -27,6 +31,8 @@ service TenderService @(path: '/odata/v4/tender') {
     entity AIResults   as projection on db.AIResults;
 
     // ── Chat History ─────────────────────────────
+    // ── Chat History ─────────────────────────────
+    @requires: 'authenticated-user'
     entity ChatHistories as projection on db.ChatHistories;
 
     // ── Unbound Actions (called as POST RPC) ──────
@@ -41,7 +47,6 @@ service TenderService @(path: '/odata/v4/tender') {
         username: String;
         role    : String;
     };
-
     /**
      * Submit an audit entry explicitly from the client.
      * Used after a PATCH on Tenders to store field-level remarks.

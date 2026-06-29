@@ -13,6 +13,9 @@
 const cds    = require('@sap/cds');
 const multer = require('multer');
 const rateLimit = require('express-rate-limit');
+const jwt       = require('jsonwebtoken');
+
+const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-for-dev';
 
 // 10 uploads per user per 15 minutes — prevents AI cost abuse and HANA saturation
 const uploadLimiter = rateLimit({
@@ -47,6 +50,21 @@ cds.on('listening', ({ server }) => {
 });
 
 cds.on('bootstrap', (app) => {
+  // ── JWT Authentication Middleware ──────────────────────────────────────────
+  app.use((req, res, next) => {
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.split(' ')[1];
+      try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        req.user = new cds.User({ id: decoded.username, roles: [decoded.role, 'authenticated-user'] });
+      } catch (err) {
+        // invalid or expired token
+      }
+    }
+    next();
+  });
+
   // Apply chat rate limiter before CAP routes are registered
   app.use('/odata/v4/tender/chat', chatLimiter);
 
@@ -84,3 +102,5 @@ cds.on('bootstrap', (app) => {
 });
 
 module.exports = cds.server;
+
+// Trigger restart

@@ -4,10 +4,14 @@
   "dependencies": {
     "@cap-js/hana": "^2",
     "@sap/cds": "^9",
+    "@sap/xssec": "^4",
     "axios": "^1.18.0",
+    "bcryptjs": "^3.0.3",
     "express-rate-limit": "^7",
     "form-data": "^4.0.6",
-    "multer": "^2.2.0"
+    "jsonwebtoken": "^9.0.3",
+    "multer": "^2.2.0",
+    "passport": "^0.7.0"
   },
   "devDependencies": {
     "@cap-js/sqlite": "^2.4",
@@ -41,8 +45,37 @@
         }
       },
       "auth": {
-        "kind": "dummy"
+        "kind": "xsuaa"
+      },
+      "[production]": {
+        "auth": {
+          "kind": "xsuaa"
+        }
+      },
+      "[development]": {
+        "db": {
+          "kind": "sqlite"
+        },
+        "auth": {
+          "kind": "mocked",
+          "users": {
+            "admin": {
+              "password": "admin",
+              "roles": [
+                "admin",
+                "authenticated-user"
+              ]
+            },
+            "alice": {
+              "password": "alice",
+              "roles": [
+                "authenticated-user"
+              ]
+            }
+          }
+        }
       }
     }
   }
 }
+

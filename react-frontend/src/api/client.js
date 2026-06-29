@@ -17,9 +17,17 @@ class ApiError extends Error {
 
 async function request(path, options = {}) {
   const url = `${BASE_URL}${path}`;
+  
+  const token = localStorage.getItem('token');
+  // If no JWT is present, fall back to mock Basic Auth (admin:admin) for local dev
+  const authHeader = token 
+    ? { 'Authorization': `Bearer ${token}` } 
+    : { 'Authorization': `Basic YWRtaW46YWRtaW4=` };
+
   const response = await fetch(url, {
     headers: {
       'Content-Type': 'application/json',
+      ...authHeader,
       ...options.headers,
     },
     ...options,

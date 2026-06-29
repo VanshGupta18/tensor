@@ -13,6 +13,9 @@
  */
 
 const cds = require('@sap/cds');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-for-dev';
 
 // ── Lazy-load axios (added via npm install) ───────────────────────────────────
 let axios;
@@ -35,7 +38,7 @@ module.exports = cds.service.impl(async function (srv) {
     if (count && Number(count.n) === 0) {
 
       // ── 1. Seed Tenders ────────────────────────────────────────────────────
-      await INSERT.into(Tenders).rows([
+      await INSERT.into(Tenders).entries([
         {
           ID: 'TND-001', tenderNo: 'MTL/MMRC/2026/T-01', version: 1,
           title: 'Construction of Metro Line 4A – Elevated Corridor',
@@ -247,21 +250,53 @@ module.exports = cds.service.impl(async function (srv) {
     return SELECT.one.from(Tenders).where({ ID: id });
   });
 
-  // ── Action: login ────────────────────────────────────────────────────────────
-  // Simple credential store — replace with XSUAA in production.
-  const USERS = {
-    admin   : { password: process.env.ADMIN_PASSWORD    || 'admin123',   role: 'admin' },
-    reviewer: { password: process.env.REVIEWER_PASSWORD || 'review123', role: 'reviewer' },
-  };
+  // ── Row-Level Security for Tenders ─────────────────────────────────────────
+  srv.before('READ', Tenders, (req) => {
+    if (req.user && !req.user.is('admin') && req.user.id !== 'anonymous' && req.user.id !== 'system') {
+      req.query.where({ createdBy: req.user.id });
+    }
+  });
 
+  // ── Action: register ─────────────────────────────────────────────────────────
+  srv.on('register', async (req) => {
+    const { username, password } = req.data;
+    if (!username || !password) return req.error(400, 'Username and password required');
+    
+    const existing = await SELECT.one.from(Users).where({ username });
+    if (existing) return req.error(400, 'Username already exists');
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const newUserId = cds.utils.uuid();
+    
+    await INSERT.into(Users).entries({
+      ID: newUserId,
+      username,
+      password: hashedPassword,
+      role: 'user',
+      createdAt: new Date().toISOString()
+    });
+
+    const token = jwt.sign({ username, role: 'user' }, JWT_SECRET, { expiresIn: '12h' });
+    return { username, role: 'user', token };
+  });
+
+  // ── Action: login ────────────────────────────────────────────────────────────
   srv.on('login', async (req) => {
     const { username, password } = req.data;
-    const record = USERS[username];
-    if (!record || record.password !== password) {
-      return req.error(401, 'Invalid username or password');
-    }
-    return { username, role: record.role };
+    if (!username || !password) return req.error(400, 'Username and password required');
+
+    const userRecord = await SELECT.one.from(Users).where({ username });
+    if (!userRecord) return req.error(401, 'Invalid credentials');
+
+    const match = await bcrypt.compare(password, userRecord.password);
+    if (!match) return req.error(401, 'Invalid credentials');
+
+    const token = jwt.sign({ username, role: userRecord.role }, JWT_SECRET, { expiresIn: '12h' });
+    return { username, role: userRecord.role, token };
   });
+
+  // ── Action: analyzePdf ────────────────────────────────────────────────────────────
+
 
   // ── Action: submitAudit ──────────────────────────────────────────────────────
   srv.on('submitAudit', async (req) => {

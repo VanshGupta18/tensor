@@ -13,11 +13,8 @@
  */
 
 const cds = require('@sap/cds');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-for-dev';
 
-// ── Lazy-load axios (added via npm install) ───────────────────────────────────
+// ── Lazy-load axios ───────────────────────────────────────────────────────────
 let axios;
 try {
   axios = require('axios');
@@ -25,203 +22,106 @@ try {
   console.warn('[TenderService] axios not installed – Python AI calls will fail.');
 }
 
+// Moved from inside processFile handler so it is not re-required on every call
+const FormData = require('form-data');
+
 const PYTHON_AI_URL = process.env.PYTHON_AI_URL || 'http://localhost:8000';
+
+// ── Streaming chat route (/api/stream-chat) ───────────────────────────────────
+// Registered at bootstrap so it sits before CAP's OData middleware.
+// Proxies Python SSE chunks directly to the browser, then persists the full
+// reply to HANA after the stream ends.
+// Registered under both paths: Vite dev proxy strips /api prefix (/stream-chat),
+// while production (React built into CAP app/) uses /api/stream-chat directly.
+cds.on('bootstrap', (app) => {
+  const streamChatHandler = async (req, res) => {
+    const { message, tenderId } = req.body || {};
+    if (!message) return res.status(400).json({ error: 'message is required' });
+
+    // Auth guard: bootstrap routes run before CAP middleware so @requires annotations
+    // do not cover them. In XSUAA mode, enforce presence of an Authorization header.
+    // Full JWT validation happens in CAP middleware for OData routes — add XSUAA
+    // passport middleware here if this route needs to be fully secured in production.
+    if (cds.env.requires?.auth?.kind === 'xsuaa' && !req.headers.authorization) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    // Persist user message (non-blocking — don't delay the stream)
+    cds.db?.run(
+      INSERT.into('TenderService.ChatHistories').entries({
+        ID: cds.utils.uuid(),
+        tender_ID: tenderId || null,
+        sender: 'user',
+        message,
+        timestamp: new Date().toISOString(),
+      })
+    ).catch(e => console.error('[stream-chat] user insert failed:', e.message));
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+
+    let fullReply = '';
+
+    try {
+      const pyRes = await axios.post(
+        `${PYTHON_AI_URL}/stream-response`,
+        { message, tenderId },
+        { responseType: 'stream', timeout: 62_000 }
+      );
+
+      pyRes.data.on('data', (chunk) => {
+        const raw = chunk.toString();
+        res.write(raw);
+        // Accumulate text for DB persistence
+        for (const line of raw.split('\n')) {
+          if (line.startsWith('data: ') && line !== 'data: [DONE]') {
+            try { const p = JSON.parse(line.slice(6)); if (p.text) fullReply += p.text; } catch {}
+          }
+        }
+      });
+
+      pyRes.data.on('end', async () => {
+        res.end();
+        if (fullReply) {
+          cds.db?.run(
+            INSERT.into('TenderService.ChatHistories').entries({
+              ID: cds.utils.uuid(),
+              tender_ID: tenderId || null,
+              sender: 'bot',
+              message: fullReply,
+              timestamp: new Date().toISOString(),
+            })
+          ).catch(e => console.error('[stream-chat] bot insert failed:', e.message));
+        }
+      });
+
+      pyRes.data.on('error', (err) => {
+        console.error('[stream-chat] stream error:', err.message);
+        res.write(`data: ${JSON.stringify({ error: err.message })}\n\ndata: [DONE]\n\n`);
+        res.end();
+      });
+
+    } catch (err) {
+      console.error('[stream-chat] Python call failed:', err.message);
+      res.write(`data: ${JSON.stringify({ error: err.message })}\n\ndata: [DONE]\n\n`);
+      res.end();
+    }
+  };
+  app.post('/api/stream-chat', streamChatHandler); // production: React served by CAP
+  app.post('/stream-chat', streamChatHandler);     // dev: Vite proxy strips /api prefix
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 module.exports = cds.service.impl(async function (srv) {
 
   const { Tenders, TenderAudits, Documents, AIResults, ChatHistories } = srv.entities;
 
-  // ── Seed initial data (SQLite / HANA) ──────────────────────────────────────
-  cds.on('served', async () => {
-    const count = await SELECT.one.from(Tenders).columns('count(*) as n');
-    if (count && Number(count.n) === 0) {
-
-      // ── 1. Seed Tenders ────────────────────────────────────────────────────
-      await INSERT.into(Tenders).entries([
-        {
-          ID: 'TND-001', tenderNo: 'MTL/MMRC/2026/T-01', version: 1,
-          title: 'Construction of Metro Line 4A – Elevated Corridor',
-          budget: '₹12,000 Crore', deadline: '2026-12-31', status: 'Draft',
-          location: 'Mumbai, Maharashtra', contractor: 'Not Selected',
-          createdBy: 'Alice', lastReviewedBy: '-', lastChangedBy: 'Alice'
-        },
-        {
-          ID: 'TND-002', tenderNo: 'SGPD/BER/2026/T-03', version: 3,
-          title: 'Smart Grids Power Distribution Upgrade – Zone 4',
-          budget: '€38,000,000', deadline: '2026-10-15', status: 'Reviewed',
-          location: 'Berlin, Germany', contractor: 'Siemens AG',
-          createdBy: 'David', lastReviewedBy: 'Emily', lastChangedBy: 'Emily'
-        },
-        {
-          ID: 'TND-003', tenderNo: 'WTF/AUS/2026/T-07', version: 2,
-          title: 'Waste Treatment Facility Upgrade – Phase 2',
-          budget: '$18,000,000', deadline: '2027-03-01', status: 'Approved',
-          location: 'Austin, Texas', contractor: 'GreenWaste Inc',
-          createdBy: 'Sarah', lastReviewedBy: 'Robert', lastChangedBy: 'Robert'
-        }
-      ]);
-
-      // ── 2. Seed Documents + AIResults with example JSON sections ───────────
-      const now = new Date().toISOString();
-
-      const seeds = [
-        {
-          tenderId: 'TND-001',
-          docId: 'doc-seed-001',
-          filename: 'metro-line-4a-tender.pdf',
-          sections: [
-            { heading: 'tender_information', sub_headings: [
-              { heading: 'tender_title', content: 'Construction of Metro Line 4A – Elevated Corridor' },
-              { heading: 'tender_no', content: 'MTL/MMRC/2026/T-01' },
-              { heading: 'issuing_authority', content: 'Mumbai Metro Rail Corporation Ltd. (MMRC)' },
-              { heading: 'tender_type', content: 'Works – EPC (Engineering, Procurement & Construction)' },
-              { heading: 'bid_type', content: 'Two-Envelope System' },
-              { heading: 'estimated_cost', content: '₹12,000 Crore (approx.)' },
-              { heading: 'funding_agency', content: 'Japan International Cooperation Agency (JICA)' },
-              { heading: 'tender_fee', content: '₹50,000 (non-refundable)' },
-              { heading: 'contact_details', sub_headings: [
-                { heading: 'name', content: 'Rajesh Kumar' },
-                { heading: 'designation', content: 'General Manager (Projects)' },
-                { heading: 'email', content: 'gm.projects@mmrc.co.in' },
-                { heading: 'mobile', content: '+91-22-26591000' }
-              ]}
-            ]},
-            { heading: 'key_dates', sub_headings: [
-              { heading: 'release_date', content: '01/06/2026' },
-              { heading: 'pre_bid_meeting', content: '15/06/2026 at 11:00 Hours (IST)' },
-              { heading: 'bid_submission_deadline', content: '31/12/2026 up to 17:00 Hours (IST)' },
-              { heading: 'technical_opening_date', content: '01/01/2027 at 11:00 Hours (IST)' }
-            ]},
-            { heading: 'scope_of_work', sub_headings: [
-              { heading: 'type', content: 'Elevated Metro Viaduct and Stations' },
-              { heading: 'location', content: 'Wadala to Kasarvadavali, Mumbai, Maharashtra' },
-              { heading: 'components', content: '17.8 km elevated viaduct; 13 stations; depot at Vikhroli; track laying and electrification; signalling and telecommunications systems' }
-            ]},
-            { heading: 'bid_security_financials', sub_headings: [
-              { heading: 'emd', content: '₹120 Crore (1% of estimated project cost) via Bank Guarantee' },
-              { heading: 'bid_validity', content: '180 days from the date of bid opening' },
-              { heading: 'performance_security', content: '5% of Contract Price, valid through Defects Liability Period' }
-            ]},
-            { heading: 'contract_conditions', sub_headings: [
-              { heading: 'completion_time', content: '48 months from the Effective Date of Contract' },
-              { heading: 'defect_liability_period', content: '24 months after completion' },
-              { heading: 'liquidated_damages', content: '0.05% of Contract Price per week of delay, subject to maximum 10% of Contract Price' }
-            ]}
-          ]
-        },
-        {
-          tenderId: 'TND-002',
-          docId: 'doc-seed-002',
-          filename: 'smart-grids-berlin-tender.pdf',
-          sections: [
-            { heading: 'tender_information', sub_headings: [
-              { heading: 'tender_title', content: 'Smart Grids Power Distribution Upgrade – Zone 4' },
-              { heading: 'tender_no', content: 'SGPD/BER/2026/T-03' },
-              { heading: 'issuing_authority', content: 'Berliner Stadtwerke GmbH' },
-              { heading: 'tender_type', content: 'Supply & Installation' },
-              { heading: 'bid_type', content: 'Open Competitive Bidding' },
-              { heading: 'estimated_cost', content: '€38,000,000' },
-              { heading: 'funding_agency', content: 'European Investment Bank (EIB)' },
-              { heading: 'contact_details', sub_headings: [
-                { heading: 'name', content: 'Hans Weber' },
-                { heading: 'designation', content: 'Head of Procurement' },
-                { heading: 'email', content: 'procurement@stadtwerke-berlin.de' }
-              ]}
-            ]},
-            { heading: 'key_dates', sub_headings: [
-              { heading: 'release_date', content: '05/04/2026' },
-              { heading: 'bid_submission_deadline', content: '15/10/2026 at 14:00 CET' },
-              { heading: 'technical_opening_date', content: '16/10/2026 at 10:00 CET' },
-              { heading: 'financial_opening_date', content: 'To be announced after technical evaluation' }
-            ]},
-            { heading: 'scope_of_work', sub_headings: [
-              { heading: 'type', content: 'Smart Grid Infrastructure Modernisation' },
-              { heading: 'location', content: 'Berlin Zone 4 – Mitte, Prenzlauer Berg, Friedrichshain' },
-              { heading: 'components', content: 'Advanced Metering Infrastructure (AMI) for 120,000 households; 42 smart substations; SCADA integration; fibre-optic communication backbone; demand response management system' }
-            ]},
-            { heading: 'bid_security_financials', sub_headings: [
-              { heading: 'emd', content: '€380,000 (1% of estimated contract value)' },
-              { heading: 'bid_validity', content: '150 days from submission deadline' },
-              { heading: 'performance_security', content: '10% of Contract Price' }
-            ]},
-            { heading: 'contract_conditions', sub_headings: [
-              { heading: 'completion_time', content: '30 months from Effective Date' },
-              { heading: 'defect_liability_period', content: '12 months after final acceptance' },
-              { heading: 'liquidated_damages', content: '0.1% of undelivered portion per week, capped at 8% of Contract Price' }
-            ]}
-          ]
-        },
-        {
-          tenderId: 'TND-003',
-          docId: 'doc-seed-003',
-          filename: 'waste-treatment-austin-tender.pdf',
-          sections: [
-            { heading: 'tender_information', sub_headings: [
-              { heading: 'tender_title', content: 'Waste Treatment Facility Upgrade – Phase 2' },
-              { heading: 'tender_no', content: 'WTF/AUS/2026/T-07' },
-              { heading: 'issuing_authority', content: 'City of Austin – Public Works Department' },
-              { heading: 'tender_type', content: 'Design-Build' },
-              { heading: 'bid_type', content: 'Request for Proposal (RFP)' },
-              { heading: 'estimated_cost', content: '$18,000,000' },
-              { heading: 'funding_agency', content: 'EPA Brownfields Grant + City Capital Budget' },
-              { heading: 'contact_details', sub_headings: [
-                { heading: 'name', content: 'Maria Santos' },
-                { heading: 'designation', content: 'Senior Procurement Officer' },
-                { heading: 'email', content: 'procurement@austintexas.gov' },
-                { heading: 'mobile', content: '+1-512-974-7890' }
-              ]}
-            ]},
-            { heading: 'key_dates', sub_headings: [
-              { heading: 'release_date', content: '10/01/2026' },
-              { heading: 'pre_bid_meeting', content: '25/01/2026 at 09:00 CST' },
-              { heading: 'bid_submission_deadline', content: '01/03/2027 at 17:00 CST' },
-              { heading: 'technical_opening_date', content: '02/03/2027 at 09:00 CST' }
-            ]},
-            { heading: 'scope_of_work', sub_headings: [
-              { heading: 'type', content: 'Wastewater Treatment Plant Upgrade and Expansion' },
-              { heading: 'location', content: 'South Austin Treatment Plant, 1017 Talmadge St, Austin TX 78702' },
-              { heading: 'components', content: 'Biological nutrient removal upgrade; new secondary clarifiers (×2); UV disinfection system replacement; SCADA modernisation; capacity expansion from 25 MGD to 40 MGD; sludge dewatering centrifuges' }
-            ]},
-            { heading: 'bid_security_financials', sub_headings: [
-              { heading: 'emd', content: '5% of bid amount via cashier\'s check or surety bond' },
-              { heading: 'bid_validity', content: '90 days from bid opening date' },
-              { heading: 'performance_security', content: '100% Performance Bond + 100% Payment Bond required' }
-            ]},
-            { heading: 'contract_conditions', sub_headings: [
-              { heading: 'completion_time', content: '36 months from Notice to Proceed' },
-              { heading: 'defect_liability_period', content: '18 months after substantial completion' },
-              { heading: 'liquidated_damages', content: '$2,500 per calendar day of delay' }
-            ]}
-          ]
-        }
-      ];
-
-      await INSERT.into(Documents).entries(seeds.map(seed => ({
-        ID: seed.docId,
-        tender_ID: seed.tenderId,
-        filename: seed.filename,
-        mimeType: 'application/pdf',
-        uploadedBy: 'system',
-        uploadedAt: now,
-      })));
-
-      await INSERT.into(AIResults).entries(seeds.map(seed => ({
-        ID: `air-seed-${seed.tenderId.toLowerCase()}`,
-        document_ID: seed.docId,
-        confidenceScore: 'high',
-        summary: seed.sections[0]?.sub_headings?.[0]?.content || seed.tenderId,
-        keyTerms: JSON.stringify(seed.sections[0]?.sub_headings?.map(s => s.heading) || []),
-        rawResponse: JSON.stringify({ sections: seed.sections }),
-        processedAt: now,
-      })));
-
-      console.log('[TenderService] Seeded initial tender data with AI sections.');
-    }
-  });
 
   // ── READ Tenders: per-user data isolation ──────────────────────────────────
-  // With dummy auth (dev) this is a no-op. In production (XSUAA), non-admin
+  // With dummy/mocked auth (dev) this is a no-op. In production (XSUAA), non-admin
   // users only see tenders they created.
   srv.before('READ', Tenders, (req) => {
     if (cds.env.requires?.auth?.kind === 'dummy') return;
@@ -250,75 +150,41 @@ module.exports = cds.service.impl(async function (srv) {
     return SELECT.one.from(Tenders).where({ ID: id });
   });
 
-  // ── Row-Level Security for Tenders ─────────────────────────────────────────
-  srv.before('READ', Tenders, (req) => {
-    if (req.user && !req.user.is('admin') && req.user.id !== 'anonymous' && req.user.id !== 'system') {
-      req.query.where({ createdBy: req.user.id });
-    }
-  });
-
-  // ── Action: register ─────────────────────────────────────────────────────────
-  srv.on('register', async (req) => {
-    const { username, password } = req.data;
-    if (!username || !password) return req.error(400, 'Username and password required');
-    
-    const existing = await SELECT.one.from(Users).where({ username });
-    if (existing) return req.error(400, 'Username already exists');
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const newUserId = cds.utils.uuid();
-    
-    await INSERT.into(Users).entries({
-      ID: newUserId,
-      username,
-      password: hashedPassword,
-      role: 'user',
-      createdAt: new Date().toISOString()
-    });
-
-    const token = jwt.sign({ username, role: 'user' }, JWT_SECRET, { expiresIn: '12h' });
-    return { username, role: 'user', token };
-  });
-
   // ── Action: login ────────────────────────────────────────────────────────────
+  // Simple credential store — replace with XSUAA in production.
+  const USERS = {
+    admin   : { password: process.env.ADMIN_PASSWORD    || 'admin123',   role: 'admin' },
+    reviewer: { password: process.env.REVIEWER_PASSWORD || 'review123', role: 'reviewer' },
+  };
+
   srv.on('login', async (req) => {
     const { username, password } = req.data;
-    if (!username || !password) return req.error(400, 'Username and password required');
-
-    const userRecord = await SELECT.one.from(Users).where({ username });
-    if (!userRecord) return req.error(401, 'Invalid credentials');
-
-    const match = await bcrypt.compare(password, userRecord.password);
-    if (!match) return req.error(401, 'Invalid credentials');
-
-    const token = jwt.sign({ username, role: userRecord.role }, JWT_SECRET, { expiresIn: '12h' });
-    return { username, role: userRecord.role, token };
+    const record = USERS[username];
+    if (!record || record.password !== password) {
+      return req.error(401, 'Invalid username or password');
+    }
+    return { username, role: record.role };
   });
-
-  // ── Action: analyzePdf ────────────────────────────────────────────────────────────
-
 
   // ── Action: submitAudit ──────────────────────────────────────────────────────
   srv.on('submitAudit', async (req) => {
     const { tenderId, fieldName, oldVal, newVal, remark, changedBy } = req.data;
 
-    // Validate tender exists
-    const tender = await SELECT.one.from(Tenders).where({ ID: tenderId });
-    if (!tender) return req.error(404, `Tender ${tenderId} not found`);
+    const exists = await SELECT.one.from(Tenders).columns('ID').where({ ID: tenderId });
+    if (!exists) return req.error(404, `Tender ${tenderId} not found`);
 
-    const id = cds.utils.uuid();
     const entry = {
-      ID: id,
+      ID:        cds.utils.uuid(),
       tender_ID: tenderId,
       fieldName,
       oldVal,
       newVal,
-      remark: remark || 'No remarks provided',
+      remark:    remark || 'No remarks provided',
       changedBy,
       changedAt: new Date().toISOString()
     };
     await INSERT.into(TenderAudits).entries(entry);
-    return SELECT.one.from(TenderAudits).where({ ID: id });
+    return entry;
   });
 
   // ── Action: processFile ──────────────────────────────────────────────────────
@@ -328,14 +194,23 @@ module.exports = cds.service.impl(async function (srv) {
     const uploadedBy = req.user?.id || 'unknown';
     const contentBuffer = Buffer.isBuffer(content) ? content : Buffer.from(content, 'base64');
 
-    // 1. Forward raw bytes to Python AI service
-    let pyTenders = null;  // array from Python: [{ confidenceScore, summary, keyTerms, sections }]
+    // ── Helper: apply AI-enriched fields to a Tender row ─────────────────────
+    // Defined once and called for both new-tender (Branch A) and duplicate (Branch B).
+    // Schema-migration tolerant: if AI columns don't exist yet (pre-deploy), warns and continues.
+    const applyAIEnrichment = async (id, setObj) => {
+      try {
+        await UPDATE(Tenders).set(setObj).where({ ID: id });
+      } catch (enrichErr) {
+        console.warn('[TenderService] AI field enrichment skipped (run cds deploy):', enrichErr.message);
+      }
+    };
 
+    // 1. Forward raw bytes to Python AI service
+    let pyTenders = null;
     let pyError = null;
 
     if (axios) {
       try {
-        const FormData = require('form-data');
         const form = new FormData();
         form.append('invoice', contentBuffer, { filename, contentType: mimeType || 'application/octet-stream' });
 
@@ -351,7 +226,6 @@ module.exports = cds.service.impl(async function (srv) {
         } else if (err.code === 'ETIMEDOUT' || err.code === 'ECONNABORTED') {
           pyError = `Python AI service timed out processing ${filename}. The file may be too large.`;
         } else if (err.response) {
-          // Python returned a 4xx/5xx — get the actual error body
           const body = err.response.data;
           pyError = `Python AI error ${err.response.status}: ${typeof body === 'object' ? JSON.stringify(body) : body}`;
         } else {
@@ -361,36 +235,20 @@ module.exports = cds.service.impl(async function (srv) {
       }
     }
 
-    // 2. Handle no AI response — store document, return descriptive error
-    if (!pyTenders) {
+    // 2. Early returns: store orphan document when AI is unavailable or found nothing
+    const storeOrphanDoc = async (msg) => {
       const docId = cds.utils.uuid();
       await INSERT.into(Documents).entries({
         ID: docId, tender_ID: tenderId || null, filename,
         mimeType: mimeType || 'application/octet-stream', uploadedBy, uploadedAt
       });
-      return JSON.stringify({
-        results: [],
-        message: pyError || 'Python AI service unavailable. Document stored.'
-      });
-    }
-
-    // 3. Handle empty tenders array (no tender found in PDF)
-    if (pyTenders.length === 0) {
-      const docId = cds.utils.uuid();
-      await INSERT.into(Documents).entries({
-        ID: docId, tender_ID: tenderId || null, filename,
-        mimeType: mimeType || 'application/octet-stream', uploadedBy, uploadedAt
-      });
-      return JSON.stringify({ results: [], message: 'No tender information found in the document.' });
-    }
-
-    // 4. Helper: extract a sub_heading value from a section
-    const getSubField = (sections, sectionHeading, fieldHeading) => {
-      const sec = (sections || []).find(s => s.heading === sectionHeading);
-      if (!sec) return null;
-      const sh = (sec.sub_headings || []).find(h => h.heading === fieldHeading);
-      return sh?.content || null;
+      return JSON.stringify({ results: [], message: msg });
     };
+
+    if (!pyTenders)        return storeOrphanDoc(pyError || 'Python AI service unavailable. Document stored.');
+    if (!pyTenders.length) return storeOrphanDoc('No tender information found in the document.');
+
+    // ── Pure helpers ──────────────────────────────────────────────────────────
 
     // Helper: parse any date string → YYYY-MM-DD (HANA DATE format), or null
     const parseDate = (str) => {
@@ -405,16 +263,6 @@ module.exports = cds.service.impl(async function (srv) {
       return null;
     };
 
-    // 5. Auto-generate next tender ID
-    const getNextTenderId = async () => {
-      const rows = await SELECT.from(Tenders).columns('ID');
-      const nums = rows
-        .map(r => parseInt((r.ID || '').replace('TND-', ''), 10))
-        .filter(n => !isNaN(n));
-      const next = nums.length > 0 ? Math.max(...nums) + 1 : 1;
-      return `TND-${String(next).padStart(3, '0')}`;
-    };
-
     // Format AI money object → "INR 52,546.85 Lakhs"
     const fmtMoney = (obj) => {
       if (!obj || !obj.amount) return '';
@@ -422,6 +270,7 @@ module.exports = cds.service.impl(async function (srv) {
       const den = obj.denomination && obj.denomination !== 'None' && obj.denomination !== 'null' ? ` ${obj.denomination}` : '';
       return `${obj.currency || 'INR'} ${amt}${den}`;
     };
+
     // Format AI date/time object → "09/06/2026  ·  15:00 IST"
     const fmtDateTime = (v) => {
       if (!v) return '';
@@ -445,56 +294,85 @@ module.exports = cds.service.impl(async function (srv) {
         .trim();
     };
 
-    // 6. Process each tender returned by AI
+    const parseVersionStr = (s) => {
+      const m = s && String(s).match(/(\d+)/);
+      return m ? parseInt(m[1], 10) : null;
+    };
+
+    // 3. Auto-generate next tender ID using numeric MAX to avoid lexicographic sort bug.
+    //    String ordering makes 'TND-999' > 'TND-1000', so ORDER BY ID DESC fails at 1000 tenders.
+    const allTenderIds = await SELECT.from(Tenders).columns('ID');
+    const maxNum = allTenderIds.reduce((max, r) => {
+      const n = parseInt((r.ID || '').replace('TND-', ''), 10);
+      return isNaN(n) ? max : Math.max(max, n);
+    }, 0);
+    let nextTenderNum = maxNum + 1;
+
+    const DEDUP_COLS = ['ID', 'title', 'budget', 'deadline', 'location', 'tenderNo'];
+
+    // 4. Batch dedup queries — two bulk queries before the loop instead of up to 2N
+    //    sequential per-iteration SELECTs. Results resolved via Map in the loop below.
+    const rawTenderNos = pyTenders
+      .map(t => normalizeTenderNo(t.tender_information?.reference_no || ''))
+      .filter(Boolean);
+
+    const [existingByTenderNoRows, existingByIdRow] = await Promise.all([
+      rawTenderNos.length > 0
+        ? SELECT.from(Tenders).columns(...DEDUP_COLS).where({ tenderNo: { in: rawTenderNos } })
+        : Promise.resolve([]),
+      tenderId
+        ? SELECT.one.from(Tenders).columns(...DEDUP_COLS).where({ ID: tenderId })
+        : Promise.resolve(null),
+    ]);
+
+    const tenderNoMap = new Map(existingByTenderNoRows.map(t => [t.tenderNo, t]));
+
+    // 5. Process each tender returned by AI
     const results = [];
 
     for (const aiTender of pyTenders) {
       // Extract key fields using the new strict JSON schema
       const tenderInfo = aiTender.tender_information || {};
-      const keyDates = aiTender.key_dates || {};
-      
+      const keyDates   = aiTender.key_dates || {};
+
       const rawTenderNo         = tenderInfo.reference_no || '';
       const extractedTenderNo   = normalizeTenderNo(rawTenderNo);
       const extractedTitle      = tenderInfo.title || aiTender.summary || 'Untitled Tender';
-      
-      const extractedBudget          = fmtMoney(tenderInfo.estimated_cost) || '';
-      const extractedDeadline        = parseDate(keyDates.bid_submission_deadline?.date);
-      const extractedLocation        = '';
-      // AI-enriched fields
-      const extractedAuthority       = tenderInfo.issuing_authority || '';
-      const extractedContractType    = tenderInfo.contract_type     || '';
-      const extractedBidSystem       = tenderInfo.bid_system        || '';
-      const extractedFundingAgency   = tenderInfo.funding_agency    || '';
-      const extractedTenderFee       = fmtMoney(tenderInfo.tender_fee);
-      const extractedBudgetCategory  = tenderInfo.budget_category   || '';
-      const extractedPublicationDate = fmtDateTime(keyDates.publication);
-      const extractedPreBidMeeting   = fmtDateTime(keyDates.pre_bid_meeting);
-      const extractedBidSubDeadline  = fmtDateTime(keyDates.bid_submission_deadline);
-      const extractedTechOpening     = fmtDateTime(keyDates.technical_opening);
-      const extractedFinOpening      = fmtDateTime(keyDates.financial_opening);
-      const extractedWorkOrder       = fmtDateTime(keyDates.work_order_issuance);
+      const extractedBudget     = fmtMoney(tenderInfo.estimated_cost) || '';
+      const extractedDeadline   = parseDate(keyDates.bid_submission_deadline?.date);
+      const extractedLocation   = '';  // no AI source available
 
-      const parseVersionStr = (s) => {
-        const m = s && String(s).match(/(\d+)/);
-        return m ? parseInt(m[1], 10) : null;
+      // AI-enriched fields built once per iteration, reused by applyAIEnrichment
+      const aiEnrichmentSet = {
+        issuingAuthority:      tenderInfo.issuing_authority          || undefined,
+        contractType:          tenderInfo.contract_type              || undefined,
+        bidSystem:             tenderInfo.bid_system                 || undefined,
+        fundingAgency:         tenderInfo.funding_agency             || undefined,
+        tenderFee:             fmtMoney(tenderInfo.tender_fee)       || undefined,
+        budgetCategory:        tenderInfo.budget_category            || undefined,
+        publicationDate:       fmtDateTime(keyDates.publication)     || undefined,
+        preBidMeeting:         fmtDateTime(keyDates.pre_bid_meeting) || undefined,
+        bidSubmissionDeadline: fmtDateTime(keyDates.bid_submission_deadline) || undefined,
+        technicalOpening:      fmtDateTime(keyDates.technical_opening)       || undefined,
+        financialOpening:      fmtDateTime(keyDates.financial_opening)       || undefined,
+        workOrderIssuance:     fmtDateTime(keyDates.work_order_issuance)     || undefined,
       };
+
       const versionFromTenderNo = (() => {
         const m = rawTenderNo.match(/VERSION\s*-?\s*(\d+)/i) || rawTenderNo.match(/\bV\s*-\s*(\d+)\b/i);
         return m ? parseInt(m[1], 10) : null;
       })();
       const extractedVersion = parseVersionStr(tenderInfo.version) || versionFromTenderNo || 1;
 
-      // Save document (linked later once we know tender ID)
+      // Save document ID (used in both branches)
       const docId = cds.utils.uuid();
 
-      // Check for existing tender: first by tenderNo, then by the tenderId passed from UI
-      let existingTender = null;
-      if (extractedTenderNo) {
-        existingTender = await SELECT.one.from(Tenders).where({ tenderNo: extractedTenderNo });
-      }
-      if (!existingTender && tenderId) {
-        existingTender = await SELECT.one.from(Tenders).where({ ID: tenderId });
-      }
+      // Resolve existing tender from pre-fetched batch results (no per-iteration SELECTs).
+      // When the PDF has a reference number, ONLY match by that number.
+      // existingByIdRow is a fallback ONLY when no reference number was extracted (e.g. scanned/unstructured PDF).
+      const existingTender = extractedTenderNo
+        ? (tenderNoMap.get(extractedTenderNo) ?? null)
+        : (existingByIdRow ?? null);
 
       let resultTenderId;
       let isNew = false;
@@ -504,47 +382,44 @@ module.exports = cds.service.impl(async function (srv) {
       if (!existingTender) {
         // ── Branch A: genuinely new tender (no match by tenderNo OR passed ID) ─
         isNew = true;
-        for (let attempt = 0; attempt < 5; attempt++) {
-          resultTenderId = await getNextTenderId();
-          try {
-            await INSERT.into(Tenders).entries({
-              ID:            resultTenderId,
-              tenderNo:      extractedTenderNo || null,
-              version:       extractedVersion,
-              title:         extractedTitle,
-              budget:        extractedBudget  || 'TBD',
-              deadline:      extractedDeadline || null,
-              status:        'Draft',
-              location:      extractedLocation || '',
-              contractor:    'Not Selected',
-              createdBy:     uploadedBy,
-              lastReviewedBy: '-',
-              lastChangedBy:  uploadedBy,
-            });
-            break;
-          } catch (insertErr) {
-            if (attempt === 4) throw insertErr;
-          }
-        }
-        // Enrich with AI-extracted fields (safe — if columns not yet deployed, warns and continues)
-        try {
-          await UPDATE(Tenders).set({
-            issuingAuthority:      extractedAuthority      || undefined,
-            contractType:          extractedContractType   || undefined,
-            bidSystem:             extractedBidSystem      || undefined,
-            fundingAgency:         extractedFundingAgency  || undefined,
-            tenderFee:             extractedTenderFee      || undefined,
-            budgetCategory:        extractedBudgetCategory || undefined,
-            publicationDate:       extractedPublicationDate || undefined,
-            preBidMeeting:         extractedPreBidMeeting  || undefined,
-            bidSubmissionDeadline: extractedBidSubDeadline || undefined,
-            technicalOpening:      extractedTechOpening    || undefined,
-            financialOpening:      extractedFinOpening     || undefined,
-            workOrderIssuance:     extractedWorkOrder      || undefined,
-          }).where({ ID: resultTenderId });
-        } catch (enrichErr) {
-          console.warn('[TenderService] AI field enrichment skipped (run cds deploy):', enrichErr.message);
-        }
+        resultTenderId = `TND-${String(nextTenderNum).padStart(3, '0')}`;
+        nextTenderNum++;
+
+        // Wrap Tender + Document + AIResult in a single transaction so a failure
+        // in any step rolls back the whole record — prevents orphaned Draft tenders.
+        await cds.db.tx(async (tx) => {
+          await tx.run(INSERT.into(Tenders).entries({
+            ID:             resultTenderId,
+            tenderNo:       extractedTenderNo || null,
+            version:        extractedVersion,
+            title:          extractedTitle,
+            budget:         extractedBudget  || 'TBD',
+            deadline:       extractedDeadline || null,
+            status:         'Draft',
+            location:       extractedLocation || '',
+            contractor:     'Not Selected',
+            createdBy:      uploadedBy,
+            lastReviewedBy: '-',
+            lastChangedBy:  uploadedBy,
+          }));
+          await tx.run(INSERT.into(Documents).entries({
+            ID: docId, tender_ID: resultTenderId, filename,
+            mimeType: mimeType || 'application/octet-stream', uploadedBy, uploadedAt
+          }));
+          await tx.run(INSERT.into(AIResults).entries({
+            ID:              cds.utils.uuid(),
+            document_ID:     docId,
+            confidenceScore: String(aiTender.confidenceScore || 'high'),
+            summary:         aiTender.summary || '',
+            keyTerms:        JSON.stringify(aiTender.keyTerms || []),
+            rawResponse:     JSON.stringify(aiTender),
+            processedAt:     new Date().toISOString(),
+          }));
+        });
+
+        // AI enrichment runs after the atomic insert — schema-migration tolerant,
+        // so a missing column doesn't roll back the already-committed Tender/Document/AIResult.
+        await applyAIEnrichment(resultTenderId, aiEnrichmentSet);
 
       } else {
         // ── Branch B: duplicate found — always ask user to confirm ────────────
@@ -562,71 +437,31 @@ module.exports = cds.service.impl(async function (srv) {
         for (const { field, dbKey, newVal } of allFields) {
           const dbValNormalized = (existingTender[dbKey] === null || existingTender[dbKey] === undefined) ? '' : String(existingTender[dbKey]).trim();
           const newValNormalized = (newVal === null || newVal === undefined) ? '' : String(newVal).trim();
-          
+
           if (newVal && dbValNormalized !== newValNormalized) {
             changedFields.push({ field, oldVal: existingTender[dbKey] || '—', newVal });
             pendingPatch[dbKey] = newVal;
           }
         }
-        // Do NOT update DB — return requiresConfirmation so React asks the user first
-        // Always silently update AI-enriched fields (no user confirmation needed)
-        try {
-          await UPDATE(Tenders).set({
-            issuingAuthority:      extractedAuthority      || undefined,
-            contractType:          extractedContractType   || undefined,
-            bidSystem:             extractedBidSystem      || undefined,
-            fundingAgency:         extractedFundingAgency  || undefined,
-            tenderFee:             extractedTenderFee      || undefined,
-            budgetCategory:        extractedBudgetCategory || undefined,
-            publicationDate:       extractedPublicationDate || undefined,
-            preBidMeeting:         extractedPreBidMeeting  || undefined,
-            bidSubmissionDeadline: extractedBidSubDeadline || undefined,
-            technicalOpening:      extractedTechOpening    || undefined,
-            financialOpening:      extractedFinOpening     || undefined,
-            workOrderIssuance:     extractedWorkOrder      || undefined,
-          }).where({ ID: resultTenderId });
-        } catch (enrichErr) {
-          console.warn('[TenderService] AI field enrichment skipped (run cds deploy):', enrichErr.message);
-        }
-      }
 
-      // Save document linked to this tender
-      await INSERT.into(Documents).entries({
-        ID: docId, tender_ID: resultTenderId, filename,
-        mimeType: mimeType || 'application/octet-stream', uploadedBy, uploadedAt
-      });
+        // Do NOT update core fields in DB — return requiresConfirmation so React asks the user first.
+        // Always silently update AI-enriched fields (no user confirmation needed).
+        await applyAIEnrichment(resultTenderId, aiEnrichmentSet);
 
-      // Generate PDF synopsis via Python and save alongside the JSON
-      let pdfBuffer = null;
-      if (axios) {
-        try {
-          const pdfRes = await axios.post(`${PYTHON_AI_URL}/generate_pdf`, {
-            tender: aiTender,
-            title: aiTender.summary || extractedTitle,
-          }, { timeout: 30_000, responseType: 'arraybuffer' });
-          pdfBuffer = Buffer.from(pdfRes.data);
-        } catch (pdfErr) {
-          console.warn('[TenderService] PDF generation skipped:', pdfErr.message);
-        }
-      }
-
-      // Save AIResult linked to document (pdfContent saved separately — column may not be deployed yet)
-      const aiResultId = cds.utils.uuid();
-      await INSERT.into(AIResults).entries({
-        ID:              aiResultId,
-        document_ID:     docId,
-        confidenceScore: String(aiTender.confidenceScore || 'high'),
-        summary:         aiTender.summary || '',
-        keyTerms:        JSON.stringify(aiTender.keyTerms || []),
-        rawResponse:     JSON.stringify(aiTender),
-        processedAt:     new Date().toISOString(),
-      });
-      if (pdfBuffer) {
-        try {
-          await UPDATE(AIResults).set({ pdfContent: pdfBuffer }).where({ ID: aiResultId });
-        } catch (pdfSaveErr) {
-          console.warn('[TenderService] Could not cache PDF in HANA (pdfContent column may not be deployed yet):', pdfSaveErr.message);
-        }
+        // Save document and AIResult linked to the existing tender
+        await INSERT.into(Documents).entries({
+          ID: docId, tender_ID: resultTenderId, filename,
+          mimeType: mimeType || 'application/octet-stream', uploadedBy, uploadedAt
+        });
+        await INSERT.into(AIResults).entries({
+          ID:              cds.utils.uuid(),
+          document_ID:     docId,
+          confidenceScore: String(aiTender.confidenceScore || 'high'),
+          summary:         aiTender.summary || '',
+          keyTerms:        JSON.stringify(aiTender.keyTerms || []),
+          rawResponse:     JSON.stringify(aiTender),
+          processedAt:     new Date().toISOString(),
+        });
       }
 
       const requiresConfirmation = !isNew;
@@ -640,16 +475,16 @@ module.exports = cds.service.impl(async function (srv) {
         pendingPatch:         requiresConfirmation ? pendingPatch : null,
         rawJson:              aiTender,
         extractedValues: {
-          tenderNo:           extractedTenderNo || '',
-          title:              extractedTitle || '',
-          budget:             extractedBudget || '',
-          deadline:           extractedDeadline || '',
-          location:           extractedLocation || '',
+          tenderNo:  extractedTenderNo || '',
+          title:     extractedTitle    || '',
+          budget:    extractedBudget   || '',
+          deadline:  extractedDeadline || '',
+          location:  extractedLocation || '',
         }
       });
     }
 
-    // 7. Return results array to React
+    // 6. Return results array to React
     return JSON.stringify({ results });
   });
 
@@ -677,17 +512,20 @@ module.exports = cds.service.impl(async function (srv) {
 
     await UPDATE(Tenders).set(safePatch).where({ ID: tenderId });
 
-    for (const { field, oldVal, newVal } of changedFieldsArr) {
-      await INSERT.into(TenderAudits).entries({
-        ID:        cds.utils.uuid(),
-        tender_ID: tenderId,
-        fieldName: field,
-        oldVal,
-        newVal,
-        remark:    'Updated from PDF upload (user confirmed)',
-        changedBy: safePatch.lastChangedBy || 'unknown',
-        changedAt: new Date().toISOString(),
-      });
+    // Batch-insert all audit entries in one round-trip
+    if (changedFieldsArr.length > 0) {
+      await INSERT.into(TenderAudits).entries(
+        changedFieldsArr.map(({ field, oldVal, newVal }) => ({
+          ID:        cds.utils.uuid(),
+          tender_ID: tenderId,
+          fieldName: field,
+          oldVal,
+          newVal,
+          remark:    'Updated from PDF upload (user confirmed)',
+          changedBy: safePatch.lastChangedBy || 'unknown',
+          changedAt: new Date().toISOString(),
+        }))
+      );
     }
 
     return JSON.stringify({ success: true, tenderId });
@@ -704,20 +542,22 @@ module.exports = cds.service.impl(async function (srv) {
 
   // ── Action: chat ──────────────────────────────────────────────────────────────
   srv.on('chat', async (req) => {
-    const { tenderId, message, sender } = req.data;
+    const { tenderId, message } = req.data;
     const timestamp = new Date().toISOString();
     const reqUser  = req.user?.id || 'user';
 
-    // 1+2. Persist user message AND call Python in parallel — don't block the AI call on a DB write
+    // 1+2. Persist user message AND call Python in parallel — don't block the AI call on a DB write.
+    // cds.db.run() returns a real Promise so Promise.all awaits the insert correctly.
+    // (Assigning INSERT.into(...).entries(...) to a variable yields a CQN builder, not a Promise.)
     let botReply = '[AI service unavailable] Your message was received.';
 
-    const userInsert = INSERT.into(ChatHistories).entries({
+    const userInsert = cds.db.run(INSERT.into(ChatHistories).entries({
       ID: cds.utils.uuid(),
       tender_ID: tenderId || null,
       sender: 'user',
       message,
       timestamp
-    });
+    }));
 
     const pyCall = axios
       ? axios.post(`${PYTHON_AI_URL}/response`, { message, tenderId, user: reqUser }, { timeout: 60_000 })
@@ -750,30 +590,22 @@ module.exports = cds.service.impl(async function (srv) {
     const { tenderId } = req.data;
     if (!tenderId) return req.error(400, 'tenderId is required');
 
-    // 1. Find the most recent AIResult that has sections for this tender
-    const docs = await SELECT.from(Documents)
+    // 1. Find the most recent Document then its AIResult — 2 queries total
+    const doc = await SELECT.one.from(Documents)
+      .columns('ID')
       .where({ tender_ID: tenderId })
-      .orderBy('uploadedAt desc');
+      .orderBy({ uploadedAt: 'desc' });
 
-    let aiResult = null;
-    for (const doc of docs) {
-      // Project away rawResponse in the discovery pass — only fetch it once we've found the right row
-      const meta = await SELECT.one.from(AIResults)
-        .columns('ID', 'summary', 'processedAt')
-        .where({ document_ID: doc.ID });
-      if (meta) {
-        const detail = await SELECT.one.from(AIResults)
-          .columns('rawResponse', 'summary')
-          .where({ ID: meta.ID });
-        if (detail?.rawResponse) {
-          aiResult = { ...meta, ...detail };
-          break;
-        }
-      }
+    if (!doc) {
+      return req.error(404, 'No AI-processed data found for this tender. Please upload a PDF first.');
     }
 
-    if (!aiResult) {
-      return req.error(404, 'No AI-processed data found for this tender. Please upload a PDF first.');
+    const aiResult = await SELECT.one.from(AIResults)
+      .columns('ID', 'rawResponse', 'summary')
+      .where({ document_ID: doc.ID });
+
+    if (!aiResult?.rawResponse) {
+      return req.error(404, 'No AI data found for this tender.');
     }
 
     // 2. Generate PDF fresh every time (always use latest template)
@@ -805,13 +637,6 @@ module.exports = cds.service.impl(async function (srv) {
       }
       console.error('[TenderService] generatePDF Python error:', detail);
       return req.error(500, `PDF generation failed: ${detail}`);
-    }
-
-    // Persist so next download is instant (best-effort — skip if column not deployed yet)
-    try {
-      await UPDATE(AIResults).set({ pdfContent: pdfBuffer }).where({ ID: aiResult.ID });
-    } catch (saveErr) {
-      console.warn('[TenderService] Could not cache PDF in HANA (pdfContent column may not be deployed yet):', saveErr.message);
     }
 
     return pdfBuffer.toString('base64');

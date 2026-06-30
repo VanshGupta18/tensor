@@ -110,8 +110,13 @@ def get_result(token, API_URL, payload, retries=3, timeout=600):
         except requests.exceptions.HTTPError as e:
             last_exc = e
             if resp.status_code >= 500 and attempt < retries - 1:
-                wait = 2 ** attempt
-                time.sleep(wait)
+                time.sleep(2 ** attempt)
+                continue
+            raise
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            last_exc = e
+            if attempt < retries - 1:
+                time.sleep(2 ** attempt)
                 continue
             raise
     raise last_exc
@@ -144,6 +149,12 @@ def get_result_tool_use(token, API_URL, payload, retries=3, timeout=600):
         except requests.exceptions.HTTPError as e:
             last_exc = e
             if resp.status_code >= 500 and attempt < retries - 1:
+                time.sleep(2 ** attempt)
+                continue
+            raise
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            last_exc = e
+            if attempt < retries - 1:
                 time.sleep(2 ** attempt)
                 continue
             raise
@@ -276,15 +287,22 @@ payment_timeline_days:
 delayed_payment_interest:
 
 ## PRICE_VARIATION
-is_applicable:
-firm_price_components:
-variable_price_components:
-material_1_name:
-material_1_index:
+is_applicable:                  ← Yes or No
+firm_price_components:          ← components that are price-firm (no variation), comma-separated
+variable_price_components:      ← components subject to price variation, comma-separated
+composite_formula:              ← if one formula covers all materials, copy the full expression verbatim
+material_1_name:                ← full item name exactly as in document, e.g. "ACSR Conductor" / "Distribution Transformer – Al wound (upto 2,500 kVA, 33 kV)"
+material_1_formula:             ← complete formula + all variable definitions as written, e.g. "P = Po + WA(AL–ALo) + WF(FE–FEo) WA = wt. of aluminium (MT/km); WF = wt. of steel (MT/km); AL = EC Grade Al Ingot price; FE = Galvanized steel wire price. Prices: 30 days prior to delivery vs. 30 days prior to tender opening"
+material_1_index_source:        ← exact IEEMA circular code + effective date, e.g. "IEEMA Circular: IEEMA/PVC/CONDUCTOR/2012 (eff. 1 Apr 2012)"
 material_2_name:
-material_2_index:
+material_2_formula:
+material_2_index_source:
 material_3_name:
-material_3_index:
+material_3_formula:
+material_3_index_source:
+← CONTINUE this 3-line pattern for EVERY additional row in the price variation table
+← Use material_4_, material_5_, material_6_, ..., material_N_ — there is NO upper limit
+← A tender may have 6–15 material rows; extract ALL of them, do not stop at any fixed number
 
 ## SCOPE_OF_WORK
 category_1:
@@ -326,7 +344,8 @@ RULES:
 3. estimated_cost_amount is a NUMBER ONLY (e.g. 52546.85). Put currency in estimated_cost_currency (e.g. INR). Put denomination in estimated_cost_denomination (e.g. Lakhs).
 4. SCOPE: major work categories only (substation, DTR, RMU, HVDS, feeder, UG cable, SCADA) — no sub-components, no environmental parameters, no post-award deliverables.
 5. DOCUMENTS: bid-stage Envelope 1 documents only (forms by number+name, eligibility certs, financial statements, BGs). Exclude design drawings, as-built drawings, safety plans, PPE lists, post-award deliverables.
-6. Numbers that are ONLY numbers: estimated_cost_amount, tender_fee_amount, emd_percentage, bid_validity_days, performance_security_percent, cpg_supply_percent, cpg_erection_percent, completion_time_months, defect_liability_months, ld_rate_per_week_percent, ld_cap_percent, maat_percentage, liquid_assets_percentage, milestone_1_percent, milestone_2_percent — write digits only, no units."""
+6. Numbers that are ONLY numbers: estimated_cost_amount, tender_fee_amount, emd_percentage, bid_validity_days, performance_security_percent, cpg_supply_percent, cpg_erection_percent, completion_time_months, defect_liability_months, ld_rate_per_week_percent, ld_cap_percent, maat_percentage, liquid_assets_percentage, milestone_1_percent, milestone_2_percent — write digits only, no units.
+7. PRICE VARIATION: For each material row in the price variation / escalation table: (a) material_N_name = full item name as printed; (b) material_N_formula = the complete formula expression PLUS all variable definitions exactly as written in the document (do not abbreviate); (c) material_N_index_source = the exact IEEMA circular code and effective date, e.g. "IEEMA/PVC/CONDUCTOR/2012 (eff. 1 Apr 2012)". Extract every row in the table — there may be 6–10 materials."""
     return {
         "messages": [
             {"role": "user", "content": prompt},
@@ -431,15 +450,22 @@ payment_timeline_days:
 delayed_payment_interest:
 
 ## PRICE_VARIATION
-is_applicable:
-firm_price_components:
-variable_price_components:
-material_1_name:
-material_1_index:
+is_applicable:                  ← Yes or No
+firm_price_components:          ← components that are price-firm (no variation), comma-separated
+variable_price_components:      ← components subject to price variation, comma-separated
+composite_formula:              ← if one formula covers all materials, copy the full expression verbatim
+material_1_name:                ← full item name exactly as in document, e.g. "ACSR Conductor" / "Distribution Transformer – Al wound (upto 2,500 kVA, 33 kV)"
+material_1_formula:             ← complete formula + all variable definitions as written, e.g. "P = Po + WA(AL–ALo) + WF(FE–FEo) WA = wt. of aluminium (MT/km); WF = wt. of steel (MT/km); AL = EC Grade Al Ingot price; FE = Galvanized steel wire price. Prices: 30 days prior to delivery vs. 30 days prior to tender opening"
+material_1_index_source:        ← exact IEEMA circular code + effective date, e.g. "IEEMA Circular: IEEMA/PVC/CONDUCTOR/2012 (eff. 1 Apr 2012)"
 material_2_name:
-material_2_index:
+material_2_formula:
+material_2_index_source:
 material_3_name:
-material_3_index:
+material_3_formula:
+material_3_index_source:
+← CONTINUE this 3-line pattern for EVERY additional row in the price variation table
+← Use material_4_, material_5_, material_6_, ..., material_N_ — there is NO upper limit
+← A tender may have 6–15 material rows; extract ALL of them, do not stop at any fixed number
 
 ## SCOPE_OF_WORK
 category_1:
@@ -481,7 +507,8 @@ RULES:
 3. estimated_cost_amount is a NUMBER ONLY (e.g. 52546.85). Put currency in estimated_cost_currency (e.g. INR). Put denomination in estimated_cost_denomination (e.g. Lakhs).
 4. SCOPE: major work categories only (substation, DTR, RMU, HVDS, feeder, UG cable, SCADA) — no sub-components, no environmental parameters, no post-award deliverables.
 5. DOCUMENTS: bid-stage Envelope 1 documents only (forms by number+name, eligibility certs, financial statements, BGs). Exclude design drawings, as-built drawings, safety plans, PPE lists, post-award deliverables.
-6. Numbers that are ONLY numbers: estimated_cost_amount, tender_fee_amount, emd_percentage, bid_validity_days, performance_security_percent, cpg_supply_percent, cpg_erection_percent, completion_time_months, defect_liability_months, ld_rate_per_week_percent, ld_cap_percent, maat_percentage, liquid_assets_percentage, milestone_1_percent, milestone_2_percent — write digits only, no units."""
+6. Numbers that are ONLY numbers: estimated_cost_amount, tender_fee_amount, emd_percentage, bid_validity_days, performance_security_percent, cpg_supply_percent, cpg_erection_percent, completion_time_months, defect_liability_months, ld_rate_per_week_percent, ld_cap_percent, maat_percentage, liquid_assets_percentage, milestone_1_percent, milestone_2_percent — write digits only, no units.
+7. PRICE VARIATION: For each material row in the price variation / escalation table: (a) material_N_name = full item name as printed; (b) material_N_formula = the complete formula expression PLUS all variable definitions exactly as written in the document (do not abbreviate); (c) material_N_index_source = the exact IEEMA circular code and effective date, e.g. "IEEMA/PVC/CONDUCTOR/2012 (eff. 1 Apr 2012)". Extract every row in the table — there may be 6–10 materials."""
     content = [{"type": "text", "text": prompt}]
     for img in images_b64:
         content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": img}})
@@ -530,7 +557,7 @@ def extract_facts_from_chunks(token_fn, API_URL, file_path_list):
         print("[filter] WARNING: All chunks dropped! Reverting to processing all chunks.")
         relevant_chunks = file_path_list
 
-    max_workers = min(len(relevant_chunks), 5)
+    max_workers = min(len(relevant_chunks), 10)
     all_facts = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(_extract_chunk, token_fn, API_URL, fp): fp for fp in relevant_chunks}
@@ -795,16 +822,17 @@ _TENDER_TOOL_SCHEMA = {
                             "type": "object",
                             "properties": {
                                 "is_applicable":          {"type": "boolean"},
-                                "applicable_components":  {"type": "array", "items": {"type": "string"}},
                                 "firm_components":        {"type": "array", "items": {"type": "string"}},
+                                "variable_components":    {"type": "array", "items": {"type": "string"}},
+                                "composite_formula":      {"type": "string"},
                                 "materials": {
                                     "type": "array",
                                     "items": {
                                         "type": "object",
                                         "properties": {
-                                            "name":              {"type": "string"},
-                                            "index_reference":   {"type": "string"},
-                                            "formula_variables": {"type": "array", "items": {"type": "string"}}
+                                            "name":         {"type": "string"},
+                                            "formula":      {"type": "string"},
+                                            "index_source": {"type": "string"}
                                         }
                                     }
                                 }
@@ -869,6 +897,7 @@ D. BID DOCUMENTS: grouped_documents must contain ONLY bid-stage forms and certif
 E. GROUPING: For grouped_documents, combine related forms on the same line with '+'. Always include form number AND name, e.g., "Form 3B (Bid Security eBG) + Form 3A (Bid Securing Declaration)".
 F. CONTACTS: The contacts array must contain UNIQUE individuals only. If the same person appears multiple times (same name or same email), merge them into a single entry using their most senior/complete designation. The name field must always be the person's actual name (e.g. "M S Gawali"), never a job title. The role field is the designation (e.g. "Chief Engineer (Special Projects)").
 G. VARIANTS: When an attribute appears as attr[variant_1] and attr[variant_2], pick the most specific/complete value. Do not use "variant_" prefixes in the output.
+H. PRICE VARIATION: Build the materials array from the extracted material_N_name / material_N_formula / material_N_index_source triplets. Each entry must have name, formula (exact expression as extracted), and index_source (exact publication name as extracted). If composite_formula is present, include it at the top level. Do not paraphrase or abbreviate formulas or index source names.
 
 STRUCTURED EXTRACTED FACTS (deduplicated across all document chunks):
 {_format_merged_for_synthesis(merged_facts)}"""
@@ -877,7 +906,7 @@ STRUCTURED EXTRACTED FACTS (deduplicated across all document chunks):
         "messages": [{"role": "user", "content": prompt}],
         "tools": [_TENDER_TOOL_SCHEMA],
         "tool_choice": {"type": "tool", "name": "structure_tender_data"},
-        "max_tokens": 4096,
+        "max_tokens": 16000,
         "anthropic_version": "bedrock-2023-05-31",
     }
     result = get_result_tool_use(token, API_URL, payload)
@@ -887,13 +916,59 @@ STRUCTURED EXTRACTED FACTS (deduplicated across all document chunks):
     if "tenders" not in result:
         result = {"tenders": [result]}
     tenders = result.get("tenders")
-    # Model sometimes returns tenders as a JSON-encoded string instead of a parsed array
+    # Model sometimes returns tenders as a JSON-encoded string (e.g. when the response was
+    # truncated at max_tokens or the upstream gateway serialized the array as a string).
     if isinstance(tenders, str):
+        parsed = None
         try:
-            tenders = json.loads(tenders)
-            result["tenders"] = tenders
+            parsed = json.loads(tenders)
         except (json.JSONDecodeError, ValueError):
-            pass
+            raw = tenders.strip()
+            # Depth-tracking recovery: walk the string to find the last complete
+            # tender object at depth 1 (inside the outer array), then close the array.
+            # This handles deeply-nested truncation that a simple rfind('}') misses.
+            depth = 0
+            last_complete_end = -1
+            in_str = False
+            esc = False
+            for i, c in enumerate(raw):
+                if esc:
+                    esc = False
+                    continue
+                if c == '\\' and in_str:
+                    esc = True
+                    continue
+                if c == '"':
+                    in_str = not in_str
+                    continue
+                if in_str:
+                    continue
+                if c in ('{', '['):
+                    depth += 1
+                elif c in ('}', ']'):
+                    depth -= 1
+                    if depth == 1:  # just closed a top-level array element
+                        last_complete_end = i + 1
+            if last_complete_end > 0:
+                try:
+                    candidate = raw[:last_complete_end].rstrip().rstrip(',') + ']'
+                    parsed = json.loads(candidate)
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            # Fallback: old approach — find last } and close any open array
+            if parsed is None:
+                last_brace = raw.rfind('}')
+                if last_brace != -1:
+                    try:
+                        candidate = raw[:last_brace + 1]
+                        if raw.lstrip().startswith('['):
+                            candidate += ']'
+                        parsed = json.loads(candidate)
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+        if parsed is not None:
+            tenders = parsed if isinstance(parsed, list) else [parsed]
+            result["tenders"] = tenders
     if not isinstance(tenders, list) or not tenders or not isinstance(tenders[0], dict):
         raise ValueError(
             f"synthesize_final_json: 'tenders' must be a non-empty list of objects, got: {str(result)[:200]}"
@@ -1099,6 +1174,15 @@ def synonym_based_validation(synthesized: dict, merged_facts: dict) -> dict:
             _set_nested(tender_w, output_path, found_value)
             print(f"[validation] Patched {output_path} = {found_value}")
             patched += 1
+
+    # Infer price_variation.is_applicable when material rows were extracted
+    pv_facts = merged_facts.get("PRICE_VARIATION", {})
+    pv_has_materials = any(k.startswith("material_") and k.endswith("_name") for k in pv_facts)
+    tender_pv = tender_w.get("price_variation")
+    if pv_has_materials and isinstance(tender_pv, dict) and not tender_pv.get("is_applicable"):
+        tender_pv["is_applicable"] = True
+        print("[validation] Inferred price_variation.is_applicable = True from extracted material rows")
+        patched += 1
 
     print(f"[validation] {patched} field(s) patched from synonym search.")
     return result

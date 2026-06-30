@@ -136,8 +136,8 @@ def process_file():
     # 3. Split — 50 pages for text PDFs, 20 for image PDFs (vision API page limit)
     # overlap=5 means consecutive chunks share 5 pages, preventing boundary losses
     is_text_pdf     = _has_text(str(file_path))
-    pages_per_chunk = 50 if is_text_pdf else 20
-    chunk_overlap   = 5  if is_text_pdf else 0
+    pages_per_chunk = 30 if is_text_pdf else 15
+    chunk_overlap   = 2  if is_text_pdf else 0
     file_path_list  = split_pdf(str(file_path), pages_per_chunk, overlap=chunk_overlap)
 
     if not _upload_semaphore.acquire(timeout=10):

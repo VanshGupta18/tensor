@@ -244,21 +244,54 @@ def generate_tender_pdf(tender: dict, doc_title: str = "Tender Synopsis") -> byt
 
     # 7. Price Variation
     pv = tender.get("price_variation", {})
-    if pv and pv.get("is_applicable"):
+    pv_has_data = bool(pv and (pv.get("is_applicable") or pv.get("materials") or
+                               pv.get("variable_components") or pv.get("firm_components") or
+                               pv.get("composite_formula")))
+    if pv_has_data:
         display_num += 1
-        story.append(Paragraph(f"{display_num}. Price Variation", styles["SectionHeading"]))
-        rows = [[_to_para("Item", styles["ColHeader"]), _to_para("Details", styles["ColHeader"])]]
-        
-        if pv.get("applicable_components"):
-            rows.append([_to_para("Applicable Components", styles["CellLabel"]), _to_para(", ".join(pv["applicable_components"]), styles["CellValue"])])
+        story.append(Paragraph(f"{display_num}. Price Variation / Escalation", styles["SectionHeading"]))
+
+        # Summary row — variable vs firm components
+        summary_rows = [[_to_para("Item", styles["ColHeader"]), _to_para("Details", styles["ColHeader"])]]
+        if pv.get("variable_components"):
+            summary_rows.append([_to_para("Variable Components", styles["CellLabel"]), _to_para(", ".join(pv["variable_components"]), styles["CellValue"])])
         if pv.get("firm_components"):
-            rows.append([_to_para("Firm Components", styles["CellLabel"]), _to_para(", ".join(pv["firm_components"]), styles["CellValue"])])
-            
-        for mat in pv.get("materials", []):
-            details = f"Index: {mat.get('index_reference','')}. Formula: {', '.join(mat.get('formula_variables', []))}"
-            rows.append([_to_para(mat.get("name",""), styles["CellLabel"]), _to_para(details, styles["CellValue"])])
-            
-        story.extend(_emit_table(rows, page_w, True))
+            summary_rows.append([_to_para("Firm / Fixed Components", styles["CellLabel"]), _to_para(", ".join(pv["firm_components"]), styles["CellValue"])])
+        if pv.get("composite_formula"):
+            summary_rows.append([_to_para("Composite Formula", styles["CellLabel"]), _to_para(pv["composite_formula"], styles["CellValue"])])
+        if len(summary_rows) > 1:
+            story.extend(_emit_table(summary_rows, page_w, True))
+
+        # Material-level 3-column table
+        materials = pv.get("materials", [])
+        if materials:
+            mat_rows = [[
+                _to_para("Material / Item", styles["ColHeader"]),
+                _to_para("Formula (Summary)", styles["ColHeader"]),
+                _to_para("Index Source & Reference", styles["ColHeader"]),
+            ]]
+            for mat in materials:
+                mat_rows.append([
+                    _to_para(mat.get("name", ""), styles["CellLabel"]),
+                    _to_para(mat.get("formula", ""), styles["CellValue"]),
+                    _to_para(mat.get("index_source", ""), styles["CellValue"]),
+                ])
+            # 3-col table: 20% name | 50% formula | 30% index source
+            col_w = [page_w * 0.20, page_w * 0.50, page_w * 0.30]
+            tbl = Table(mat_rows, colWidths=col_w, repeatRows=1)
+            tbl.setStyle(TableStyle([
+                ("BACKGROUND",  (0, 0), (-1, 0),  _NAVY),
+                ("TEXTCOLOR",   (0, 0), (-1, 0),  colors.white),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, _ROW_ALT]),
+                ("GRID",        (0, 0), (-1, -1), 0.5, _BORDER),
+                ("VALIGN",      (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING",  (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING",   (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING",(0, 0), (-1, -1), 5),
+            ]))
+            story.append(tbl)
+            story.append(Spacer(1, 6))
 
     # 8. Contract Conditions
     cc = tender.get("contract_conditions", {})

@@ -12,15 +12,11 @@ export default function LoginScreen({ onLoginSuccess }) {
     e.preventDefault();
     setError('');
     setLoading(true);
-
     try {
-      const result = isRegistering 
+      const result = isRegistering
         ? await register(username, password)
         : await login(username, password);
-      
-      if (result && result.token) {
-        localStorage.setItem('token', result.token);
-      }
+      if (result?.token) localStorage.setItem('token', result.token);
       onLoginSuccess(result.username || username);
     } catch (err) {
       setError(err.message || (isRegistering ? 'Registration failed' : 'Invalid credentials'));
@@ -31,49 +27,91 @@ export default function LoginScreen({ onLoginSuccess }) {
 
   return (
     <div className="login-page">
-      <div className="login-container panel">
-        <h2>{isRegistering ? 'Create Account' : 'Welcome back'}</h2>
-        <p>{isRegistering ? 'Sign up for a new account' : 'Sign in to your account'}</p>
+      <div className="login-card">
 
-        {error && <div className="error-msg">{error}</div>}
+        {/* Left — brand + value props */}
+        <div className="login-left">
+          <div className="ll-brand">
+            <div className="ll-mark">TF</div>
+            <span className="ll-name">TenderFlow</span>
+          </div>
 
-        <form onSubmit={handleSubmit}>
-          <div className="form-group">
-            <label>Username</label>
-            <input
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              className="form-input"
-              disabled={loading}
-              required
-            />
+          <div>
+            <div className="ll-headline">
+              Procurement,<br />made <em>precise</em>.
+            </div>
+            <div className="ll-sub">
+              One workspace to track, review, and approve tenders — with an AI copilot that reads the PDFs for you.
+            </div>
           </div>
-          <div className="form-group">
-            <label>Password</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="form-input"
-              disabled={loading}
-              required
-            />
+
+          <div className="ll-feats" aria-hidden="true">
+            <div className="ll-feat"><div className="ll-dot" />Upload a PDF — fields populate automatically</div>
+            <div className="ll-feat"><div className="ll-dot" />Full version history and approval audit trail</div>
+            <div className="ll-feat"><div className="ll-dot" />Ask the AI Copilot any question about a tender</div>
           </div>
-          <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '8px' }} disabled={loading}>
-            {loading ? (isRegistering ? 'Registering…' : 'Signing in…') : (isRegistering ? 'Register' : 'Sign In')}
-          </button>
-        </form>
-        <div style={{ marginTop: '16px', textAlign: 'center' }}>
-          <button 
-            type="button" 
-            className="btn btn-ghost" 
-            onClick={() => { setIsRegistering(!isRegistering); setError(''); }}
-            disabled={loading}
-          >
-            {isRegistering ? 'Already have an account? Sign In' : 'Need an account? Register'}
-          </button>
         </div>
+
+        {/* Right — form */}
+        <div className="login-right">
+          <div className="lr-title">
+            {isRegistering ? 'Create account' : 'Welcome back'}
+          </div>
+          <div className="lr-sub">
+            {isRegistering ? 'Sign up for a new account' : 'Sign in to continue'}
+          </div>
+
+          {error && <div className="error-msg">{error}</div>}
+
+          <form onSubmit={handleSubmit}>
+            <div className="login-field">
+              <label htmlFor="lf-username">Username</label>
+              <input
+                className="login-input"
+                type="text"
+                id="lf-username"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                autoComplete="username"
+                disabled={loading}
+                required
+                placeholder="your.name"
+              />
+            </div>
+            <div className="login-field">
+              <label htmlFor="lf-password">Password</label>
+              <input
+                className="login-input"
+                type="password"
+                id="lf-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete={isRegistering ? 'new-password' : 'current-password'}
+                disabled={loading}
+                required
+                placeholder="••••••••"
+              />
+            </div>
+            <button type="submit" className="login-submit" disabled={loading}>
+              {loading
+                ? (isRegistering ? 'Registering…' : 'Signing in…')
+                : (isRegistering ? 'Register' : 'Sign In')}
+            </button>
+          </form>
+
+          <div className="login-toggle">
+            <button
+              type="button"
+              onClick={() => { setIsRegistering(!isRegistering); setError(''); }}
+              disabled={loading}
+            >
+              {isRegistering
+                ? 'Already have an account? Sign In'
+                : 'Need an account? Register'}
+            </button>
+          </div>
+        </div>
+
       </div>
     </div>
   );

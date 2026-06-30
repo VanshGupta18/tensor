@@ -31,11 +31,11 @@ export async function sendChatMessage(message, tenderId = null, sender = 'user')
  */
 const STREAM_TIMEOUT_MS = 90_000;
 
-export async function streamChatMessage(message, tenderId = null, onChunk) {
+export async function streamChatMessage(message, tenderId = null, onChunk, history = []) {
   const res = await fetch('/api/stream-chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, tenderId }),
+    body: JSON.stringify({ message, tenderId, history }),
   });
 
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -92,22 +92,47 @@ export async function streamChatMessage(message, tenderId = null, onChunk) {
  * @param {string} tenderId  - Optional: context tender ID.
  * @returns {Promise<object>} - Parsed AI result JSON.
  */
+/**
+ * Upload a PDF for AI processing.
+ *
+ * Request path:  Browser → Vite proxy (/upload) → CAP (:4004/upload)
+ *                       → Python AI (:8000/process_file)
+ *
+ * The field name MUST be "invoice" — multer in server.js is keyed to that name.
+ * tenderId is optional; when provided, CAP uses it as a duplicate-detection hint.
+ *
+ * Throws an Error whose message is the human-readable failure reason.
+ * The caller (ChatbotPanel) shows err.message directly — do NOT wrap it in
+ * another "Upload failed:" prefix here (that causes the double-prefix bug).
+ */
 export async function uploadFileForProcessing(file, tenderId = null) {
   const formData = new FormData();
-  formData.append('invoice', file);
+  formData.append('invoice', file);           // field name must match multer config
   if (tenderId) formData.append('tenderId', tenderId);
 
+  // No Content-Type header — the browser sets it automatically with the
+  // correct multipart boundary when body is FormData.
   const response = await fetch('/upload', { method: 'POST', body: formData });
 
   if (!response.ok) {
-    let errMsg = `Upload failed: HTTP ${response.status} ${response.statusText}`;
+    // Try to extract the structured error the server sends back as JSON.
+    // Fallback to the HTTP status line if the body is an HTML error page
+    // (e.g. Express default 500, or Vite proxy HTML 502).
+    let errMsg = `HTTP ${response.status} ${response.statusText}`;
     try {
-      const err = await response.json();
-      errMsg = err?.error?.message || err?.error || err?.message || errMsg;
-    } catch { /* server returned non-JSON (HTML error page) — use status text */ }
+      const body = await response.json();
+      // Server returns { error: string } or { error: { message: string } }
+      errMsg = body?.error?.message ?? body?.error ?? body?.message ?? errMsg;
+    } catch {
+      // Non-JSON body (HTML page from proxy/Express default error handler)
+      if (response.status === 502) {
+        errMsg = 'Could not reach the backend (502). Is the CAP server running on port 4004?';
+      }
+    }
     throw new Error(errMsg);
   }
 
+  // CAP wraps action returns in { value: <string> }; unwrap and parse
   const json      = await response.json();
   const rawString = json?.value ?? json;
   try {

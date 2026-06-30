@@ -1,203 +1,198 @@
 import React, { useState, useRef, useEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { streamChatMessage, uploadFileForProcessing, applyTenderUpdate } from '../api/chatApi.js';
 import { validatePdfFile } from '../utils/fileUtils.js';
 
-// ── Inline markdown renderer ──────────────────────────────────────────────────
-// Handles: **bold**, bullet lists (- / *), numbered lists, blank-line paragraphs.
-function MarkdownText({ text }) {
-  if (!text) return null;
+// ── PDF processing timeline ───────────────────────────────────────────────────
+const UPLOAD_STAGES = [
+  { label: 'Reading PDF', detail: 'Loading file into memory', delay: 0 },
+  { label: 'Extracting text', detail: 'Parsing document structure', delay: 2800 },
+  { label: 'Identifying tender fields', detail: 'Matching headers and metadata', delay: 6500 },
+  { label: 'Running AI analysis', detail: 'Classifying and structuring fields', delay: 13000 },
+  { label: 'Saving to database', detail: 'Persisting extracted tender data', delay: 24000 },
+];
 
-  const lines = text.split('\n');
-  const elements = [];
-  let i = 0;
+function UploadTimeline({ filename }) {
+  const [step, setStep] = useState(0);
+  const [timestamps, setTimestamps] = useState([]);
 
-  while (i < lines.length) {
-    const line = lines[i];
+  useEffect(() => {
+    setTimestamps([new Date()]);
+    const timers = UPLOAD_STAGES.slice(1).map((s, i) =>
+      setTimeout(() => {
+        setStep(i + 1);
+        setTimestamps(prev => {
+          const newTs = [...prev];
+          newTs[i + 1] = new Date();
+          return newTs;
+        });
+      }, s.delay)
+    );
+    return () => timers.forEach(clearTimeout);
+  }, []);
 
-    // Blank line → spacer
-    if (line.trim() === '') {
-      elements.push(<div key={i} style={{ height: '6px' }} />);
-      i++;
-      continue;
-    }
+  return (
+    <div style={{ fontSize: '13px', minWidth: '220px' }}>
+      {/* Filename header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '16px' }}>
+        <div style={{
+          width: 28, height: 28, borderRadius: '6px', flexShrink: 0,
+          background: 'color-mix(in srgb, var(--copper) 12%, transparent)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--copper)" strokeWidth="2" aria-hidden="true">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" />
+            <polyline points="14 2 14 8 20 8" />
+          </svg>
+        </div>
+        <div>
+          <div style={{ fontWeight: 600, color: 'var(--ink)', lineHeight: 1.2 }}>{filename}</div>
+          <div style={{ fontSize: '11px', color: 'var(--slate)', marginTop: '1px' }}>Processing…</div>
+        </div>
+      </div>
 
-    // Bullet list item  (- text  or  * text)
-    const bulletMatch = line.match(/^(\s*[-*])\s+(.+)/);
-    if (bulletMatch) {
-      const listItems = [];
-      while (i < lines.length && lines[i].match(/^(\s*[-*])\s+(.+)/)) {
-        const m = lines[i].match(/^(\s*[-*])\s+(.+)/);
-        listItems.push(<li key={i}>{renderInline(m[2])}</li>);
-        i++;
-      }
-      elements.push(
-        <ul key={`ul-${i}`} style={{ margin: '4px 0', paddingLeft: '20px' }}>
-          {listItems}
-        </ul>
-      );
-      continue;
-    }
+      {/* Stages */}
+      {UPLOAD_STAGES.map((s, i) => {
+        const done = i < step;
+        const active = i === step;
+        const isLast = i === UPLOAD_STAGES.length - 1;
 
-    // Numbered list  (1. text)
-    const numMatch = line.match(/^\d+\.\s+(.+)/);
-    if (numMatch) {
-      const listItems = [];
-      while (i < lines.length && lines[i].match(/^\d+\.\s+(.+)/)) {
-        const m = lines[i].match(/^\d+\.\s+(.+)/);
-        listItems.push(<li key={i}>{renderInline(m[1])}</li>);
-        i++;
-      }
-      elements.push(
-        <ol key={`ol-${i}`} style={{ margin: '4px 0', paddingLeft: '20px' }}>
-          {listItems}
-        </ol>
-      );
-      continue;
-    }
+        return (
+          <div key={i} style={{ display: 'flex', gap: '12px', alignItems: 'stretch', paddingBottom: isLast ? '0' : '18px' }}>
+            {/* Track column */}
+            <div style={{ position: 'relative', width: '18px', flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+              {/* Dot */}
+              <div style={{
+                width: 18, height: 18, borderRadius: '50%', flexShrink: 0,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: done ? 'var(--copper)' : 'transparent',
+                border: done ? 'none' : '2px solid var(--copper)',
+                borderColor: done ? 'transparent' : active ? 'var(--copper)' : 'var(--edge)',
+                borderTopColor: active ? 'transparent' : '',
+                boxSizing: 'border-box',
+                animation: active ? 'spin 1.1s linear infinite' : 'none',
+                transition: 'background 0.25s, border-color 0.25s',
+                position: 'relative',
+                zIndex: 2,
+                marginTop: '1px',
+              }}>
+                {done && (
+                  <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                )}
+                {active && (
+                  <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--copper)' }} />
+                )}
+              </div>
 
-    // Regular paragraph line
-    elements.push(<p key={i} style={{ margin: '2px 0' }}>{renderInline(line)}</p>);
-    i++;
-  }
+              {/* Connector */}
+              {!isLast && (
+                <div style={{
+                  position: 'absolute',
+                  top: '19px',
+                  bottom: '-1px',
+                  left: '8px',
+                  width: 2,
+                  background: done ? 'var(--copper)' : 'var(--edge-lt)',
+                  transition: 'background 0.4s',
+                  zIndex: 1,
+                }} />
+              )}
+            </div>
 
-  return <div style={{ lineHeight: '1.55', fontSize: '14px' }}>{elements}</div>;
+            {/* Label column */}
+            <div style={{
+              flex: 1,
+              paddingBottom: isLast ? '0' : '4px',
+              opacity: i > step ? 0.38 : 1,
+              transition: 'opacity 0.3s',
+            }}>
+              <div style={{
+                fontWeight: active ? 600 : done ? 500 : 400,
+                color: active ? 'var(--copper)' : done ? 'var(--ink)' : 'var(--slate)',
+                lineHeight: 1.2, marginBottom: '2px',
+                transition: 'color 0.25s',
+              }}>
+                {s.label}
+              </div>
+              <div style={{
+                fontSize: '11px',
+                color: active ? 'color-mix(in srgb, var(--copper) 70%, transparent)' : 'var(--slate)',
+                transition: 'color 0.25s',
+              }}>
+                {s.detail}
+              </div>
+            </div>
+
+            {/* Time column */}
+            <div style={{
+              fontSize: '10px',
+              color: 'var(--slate)',
+              opacity: done ? 0.6 : 0,
+              transition: 'opacity 0.3s',
+              paddingTop: '2px',
+              whiteSpace: 'nowrap',
+              fontVariantNumeric: 'tabular-nums',
+            }}>
+              {timestamps[i] ? timestamps[i].toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' }) : ''}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
-// Render inline formatting: **bold**, *italic*, `code`
-function renderInline(text) {
-  const parts = [];
-  // Split on **bold**, *italic*, or `code`
-  const regex = /(\*\*(.+?)\*\*|\*(.+?)\*|`(.+?)`)/g;
-  let last = 0;
-  let match;
-
-  while ((match = regex.exec(text)) !== null) {
-    if (match.index > last) parts.push(text.slice(last, match.index));
-
-    if (match[0].startsWith('**')) {
-      parts.push(<strong key={match.index}>{match[2]}</strong>);
-    } else if (match[0].startsWith('*')) {
-      parts.push(<em key={match.index}>{match[3]}</em>);
-    } else if (match[0].startsWith('`')) {
-      parts.push(
-        <code key={match.index} style={{ background: 'rgba(0,0,0,0.08)', padding: '1px 4px', borderRadius: '3px', fontSize: '12px' }}>
-          {match[4]}
-        </code>
-      );
-    }
-    last = match.index + match[0].length;
-  }
-
-  if (last < text.length) parts.push(text.slice(last));
-  return parts.length === 1 && typeof parts[0] === 'string' ? parts[0] : parts;
-}
-
-// ── File upload result renderer ───────────────────────────────────────────────
-function FileResultMessage({ filename, results, message, confirmStates, onConfirm, onReject, onViewChanges }) {
+// ── Simplified file-result card ───────────────────────────────────────────────
+function FileResult({ filename, results, message, confirmStates, onConfirm, onReject }) {
   if (!results || results.length === 0) {
     return (
-      <div>
-        <div style={{ fontWeight: 600, marginBottom: '6px' }}>📄 {filename}</div>
-        <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>
-          ℹ️ {message || 'No tender information found in this document.'}
+      <div style={{ fontSize: '13px' }}>
+        <span style={{ fontWeight: 600 }}>📄 {filename}</span>
+        <div style={{ color: 'var(--text-muted)', marginTop: '4px' }}>
+          {message || 'No tender information found.'}
         </div>
       </div>
     );
   }
 
   return (
-    <div>
-      <div style={{ fontWeight: 600, marginBottom: '10px' }}>📄 {filename}</div>
+    <div style={{ fontSize: '13px' }}>
+      <div style={{ fontWeight: 600, marginBottom: '8px' }}>📄 {filename}</div>
       {results.map((r, i) => {
-        const confirmState = confirmStates?.[i]; // 'pending' | 'loading' | 'confirmed' | 'rejected'
+        const state = confirmStates?.[i];
 
-        if (r.requiresConfirmation) {
-          if (!r.changedFields || r.changedFields.length === 0) {
-            return (
-              <div key={i} style={{
-                marginBottom: '10px', padding: '10px 12px', borderRadius: '8px',
-                border: '1px solid var(--border-color)', background: 'var(--bg-hover)',
-              }}>
-                <div style={{ fontWeight: 600, fontSize: '13px', marginBottom: '4px', color: 'var(--text-muted)' }}>
-                  ℹ️ No changes found in followup
-                </div>
-                <div style={{ fontSize: '13px', fontWeight: 500, marginBottom: '4px' }}>{r.title}</div>
-                {r.tenderNo && (
-                  <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                    Ref: {r.tenderNo}
-                  </div>
-                )}
-              </div>
-            );
-          }
-
+        if (r.requiresConfirmation && r.changedFields?.length > 0) {
           return (
             <div key={i} style={{
-              marginBottom: '10px', padding: '10px 12px', borderRadius: '8px',
-              border: '1px solid #fbbf24', background: '#fffbeb',
+              padding: '10px 12px', borderRadius: '8px',
+              border: '1px solid #fbbf24', background: '#fffbeb', marginBottom: '8px',
             }}>
-              <div style={{ fontWeight: 600, fontSize: '13px', marginBottom: '4px', color: '#92400e' }}>
-                ⚠️ Duplicate tender found
+              <div style={{ fontWeight: 600, color: '#92400e', marginBottom: '4px' }}>
+                ⚠️ Duplicate — {r.tenderNo || r.title}
               </div>
-              <div style={{ fontSize: '13px', fontWeight: 500, marginBottom: '4px' }}>{r.title}</div>
-              {r.tenderNo && (
-                <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>
-                  Ref: {r.tenderNo}
-                </div>
-              )}
-              <div style={{ fontSize: '12px', marginBottom: '10px', color: '#78350f' }}>
-                A tender with this reference already exists. Do you want to update it with the information from this PDF?
+              <div style={{ color: '#78350f', marginBottom: '8px', fontSize: '12px' }}>
+                Update existing tender with info from this PDF?
               </div>
-
-              {r.changedFields && r.changedFields.length > 0 && (
-                <div style={{ marginBottom: '10px' }}>
-                  <button
-                    type="button"
-                    onClick={() => onViewChanges(r)}
-                    style={{
-                      fontSize: '12px',
-                      color: 'var(--primary)',
-                      background: 'none',
-                      border: 'none',
-                      textDecoration: 'underline',
-                      cursor: 'pointer',
-                      padding: 0,
-                      fontWeight: 600,
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '4px'
-                    }}
-                  >
-                    🔍 SEE followup changes
-                  </button>
-                </div>
-              )}
-
-              {confirmState === 'confirmed' && (
-                <div style={{ fontSize: '12px', color: '#065f46', fontWeight: 500 }}>✅ Tender updated successfully.</div>
-              )}
-              {confirmState === 'rejected' && (
-                <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>❌ Update cancelled — no changes made.</div>
-              )}
-              {confirmState === 'error' && (
-                <div style={{ fontSize: '12px', color: '#dc2626' }}>⚠️ Failed to apply update. Please try again.</div>
-              )}
-              {(!confirmState || confirmState === 'loading') && (
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                  <span style={{ fontSize: '12px', color: '#92400e' }}>Update tender info and data?</span>
+              {state === 'confirmed' && <div style={{ color: '#065f46', fontWeight: 500 }}>✅ Updated.</div>}
+              {state === 'rejected' && <div style={{ color: 'var(--text-muted)' }}>Skipped.</div>}
+              {state === 'error' && <div style={{ color: '#dc2626' }}>Update failed.</div>}
+              {(!state || state === 'loading') && (
+                <div style={{ display: 'flex', gap: '8px' }}>
                   <button
                     onClick={() => onConfirm(i, r.tenderId, r.pendingPatch, r.changedFields)}
-                    disabled={confirmState === 'loading'}
-                    style={{ fontSize: '12px', padding: '4px 12px', borderRadius: '6px', border: 'none', background: '#059669', color: '#fff', cursor: 'pointer', fontWeight: 600 }}
+                    disabled={state === 'loading'}
+                    style={{ padding: '4px 14px', borderRadius: '6px', border: 'none', background: '#059669', color: '#fff', cursor: 'pointer', fontWeight: 600, fontSize: '12px' }}
                   >
-                    {confirmState === 'loading' ? 'Updating…' : 'Yes, update'}
+                    {state === 'loading' ? 'Updating…' : 'Yes, update'}
                   </button>
                   <button
                     onClick={() => onReject(i)}
-                    disabled={confirmState === 'loading'}
-                    style={{ fontSize: '12px', padding: '4px 12px', borderRadius: '6px', border: '1px solid #d1d5db', background: '#fff', color: '#374151', cursor: 'pointer' }}
+                    disabled={state === 'loading'}
+                    style={{ padding: '4px 14px', borderRadius: '6px', border: '1px solid #d1d5db', background: '#fff', cursor: 'pointer', fontSize: '12px' }}
                   >
-                    No, skip
+                    Skip
                   </button>
                 </div>
               )}
@@ -205,130 +200,39 @@ function FileResultMessage({ filename, results, message, confirmStates, onConfir
           );
         }
 
-        // ── New tender ────────────────────────────────────────────────────────
         return (
           <div key={i} style={{
-            marginBottom: '10px', padding: '10px 12px', borderRadius: '8px',
-            border: '1px solid #a7f3d0', background: '#f0fdf4',
+            padding: '10px 12px', borderRadius: '8px',
+            border: '1px solid #a7f3d0', background: '#f0fdf4', marginBottom: '8px',
           }}>
-            <div style={{ fontWeight: 600, fontSize: '13px', marginBottom: '4px', color: '#065f46' }}>
-              ✅ New tender created
+            <div style={{ fontWeight: 600, color: '#065f46' }}>
+              ✅ {r.requiresConfirmation ? 'No changes found' : 'Tender saved'}
             </div>
-            <div style={{ fontSize: '13px', fontWeight: 500, marginBottom: '4px' }}>{r.title}</div>
-            {r.tenderNo && (
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                Ref: {r.tenderNo}
-              </div>
-            )}
+            <div style={{ color: 'var(--text-muted)', marginTop: '2px' }}>{r.title}</div>
+            {r.tenderNo && <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{r.tenderNo}</div>}
           </div>
         );
       })}
-      <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
-        Full details available in each tender's Details page.
-      </div>
     </div>
   );
-}
-
-// ── Upload processing stages (keyed by elapsed seconds) ──────────────────────
-const UPLOAD_STAGES = [
-  { minSec: 0,   label: 'Uploading document…',           detail: 'Sending file to server'                          },
-  { minSec: 4,   label: 'Splitting PDF into chunks…',    detail: 'Breaking into 50-page segments for parallel AI'  },
-  { minSec: 12,  label: 'Analysing document with AI…',   detail: 'Reading all pages in parallel — this takes ~90s' },
-  { minSec: 90,  label: 'Synthesising extracted data…',  detail: 'Deduplicating and cleaning results across chunks' },
-  { minSec: 115, label: 'Structuring final output…',     detail: 'Organising into sections and headings'           },
-  { minSec: 145, label: 'Finalising tender summary…',    detail: 'Almost there'                                    },
-];
-
-// ── AI thinking indicator shown during file upload ────────────────────────────
-function UploadThinkingMessage() {
-  const mountTime = useRef(Date.now());
-  const [elapsed, setElapsed] = useState(0);
-
-  useEffect(() => {
-    const id = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - mountTime.current) / 1000));
-    }, 500);
-    return () => clearInterval(id);
-  }, []);
-
-  const stage = UPLOAD_STAGES.reduce((cur, s) => elapsed >= s.minSec ? s : cur, UPLOAD_STAGES[0]);
-  const progress = Math.min((elapsed / 160) * 100, 96);
-  const remaining = Math.max(0, 160 - elapsed);
-  const mins = Math.floor(elapsed / 60);
-  const secs = elapsed % 60;
-  const elapsedStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
-  const remainStr = remaining < 60 ? `~${remaining}s` : `~${Math.ceil(remaining / 60)}m`;
-
-  return (
-    <div style={{ minWidth: 240 }}>
-      {/* Stage label with spinner */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-        <svg
-          width="14" height="14" viewBox="0 0 24 24" fill="none"
-          stroke="var(--primary)" strokeWidth="2.5" strokeLinecap="round"
-          style={{ animation: 'spin 0.9s linear infinite', flexShrink: 0 }}
-        >
-          <circle cx="12" cy="12" r="10" stroke="var(--border-color)" />
-          <path d="M12 2a10 10 0 0 1 10 10" stroke="var(--primary)" />
-        </svg>
-        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-main)' }}>
-          {stage.label}
-        </span>
-      </div>
-
-      {/* Detail text */}
-      <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 10, paddingLeft: 22 }}>
-        {stage.detail}
-      </div>
-
-      {/* Progress bar */}
-      <div style={{ height: 3, background: 'var(--border-color)', borderRadius: 2, overflow: 'hidden', marginBottom: 6 }}>
-        <div style={{
-          height: '100%',
-          width: `${progress}%`,
-          background: 'var(--primary)',
-          borderRadius: 2,
-          transition: 'width 0.9s ease',
-          animation: progress >= 96 ? 'progress-pulse 1.2s ease-in-out infinite' : 'none',
-        }} />
-      </div>
-
-      {/* Time row */}
-      <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between' }}>
-        <span>{elapsedStr} elapsed</span>
-        {elapsed > 10 && remaining > 5 && <span>{remainStr} remaining</span>}
-      </div>
-    </div>
-  );
-}
-
-// ── Race a promise against a timeout so the panel never gets stuck ────────────
-function withTimeout(promise, ms, label) {
-  const timer = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error(`${label} timed out. Please try again.`)), ms)
-  );
-  return Promise.race([promise, timer]);
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploadComplete, mode = 'normal', setMode, tenders = [] }) {
-  const [messages, setMessages] = useState([
-    {
-      id: 1,
-      text: "Hello! I'm your AI assistant. You can ask me questions about your tenders or upload a PDF document for structured data extraction.",
-      sender: 'bot',
-      type: 'text',
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    }
-  ]);
+export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploadComplete, tenders = [] }) {
+  const activeTender = tenders?.find(t => t.id === tenderId);
+  const tenderLabel = activeTender ? (activeTender.tenderNo || activeTender.title || '') : '';
+
+  const welcomeText = tenderId
+    ? `Ask me anything about this tender, or upload a follow-up PDF to update its information.`
+    : `Upload a tender PDF to extract and save its information automatically, or ask a question.`;
+
+  const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingType, setProcessingType] = useState(null); // 'chat' | 'upload'
-  // { [msgId]: { [resultIndex]: 'pending'|'loading'|'confirmed'|'rejected'|'error' } }
+  const [uploadFilename, setUploadFilename] = useState('');
   const [confirmStates, setConfirmStates] = useState({});
-  const [viewingChanges, setViewingChanges] = useState(null);
-  const [activeTab, setActiveTab] = useState('table'); // 'table' | 'json'
+
   const fileInputRef = useRef(null);
   const messagesEndRef = useRef(null);
 
@@ -336,121 +240,77 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Reset messages when context changes
-  useEffect(() => {
-    setMessages([
-      {
-        id: Date.now(), // Use unique ID to force re-render if needed
-        text: "Hello! I'm your AI assistant. You can ask me questions about your tenders or upload a PDF document for structured data extraction.",
-        sender: 'bot',
-        type: 'text',
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      }
-    ]);
-  }, [tenderId]);
+  // Reset on context change
+  useEffect(() => { setMessages([]); }, [tenderId]);
 
   useEffect(() => {
     document.body.style.overflow = isOpen ? 'hidden' : '';
     return () => { document.body.style.overflow = ''; };
   }, [isOpen]);
 
-  useEffect(() => {
-    if (isOpen && mode === 'followup' && tenderId) {
-      setMessages(prev => {
-        // Prevent duplicate follow-up prompts for the same session/opening
-        const hasFollowUpPrompt = prev.some(m => m.isFollowUpPrompt && m.tenderId === tenderId);
-        if (hasFollowUpPrompt) return prev;
-
-        const activeT = tenders?.find(t => t.id === tenderId);
-        const label = activeT ? (activeT.tenderNo || tenderId) : tenderId;
-
-        return [...prev, {
-          id: `followup-${Date.now()}`,
-          isFollowUpPrompt: true,
-          tenderId,
-          text: `Add a follow-up file for tender context **${label}**:`,
-          sender: 'bot',
-          type: 'followup-request',
-          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        }];
-      });
-      if (setMode) setMode('normal');
-    }
-  }, [isOpen, mode, tenderId, setMode]);
-
   const addMessage = (payload, sender) => {
     setMessages(prev => [...prev, {
       id: crypto.randomUUID(),
       sender,
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      ...(typeof payload === 'string'
-        ? { text: payload, type: 'text' }
-        : payload),
+      ...(typeof payload === 'string' ? { text: payload, type: 'text' } : payload),
     }]);
   };
 
-  // ── Duplicate-update confirmation handlers ───────────────────────────────────
-  const handleConfirmUpdate = async (msgId, resultIdx, resultTenderId, patch, changedFields) => {
-    setConfirmStates(prev => ({ ...prev, [msgId]: { ...(prev[msgId] || {}), [resultIdx]: 'loading' } }));
+  // ── Confirm / reject duplicate update ────────────────────────────────────────
+  const handleConfirm = async (msgId, idx, resultTenderId, patch, changedFields) => {
+    setConfirmStates(prev => ({ ...prev, [msgId]: { ...(prev[msgId] || {}), [idx]: 'loading' } }));
     try {
       await applyTenderUpdate(resultTenderId, patch, changedFields);
-      setConfirmStates(prev => ({ ...prev, [msgId]: { ...(prev[msgId] || {}), [resultIdx]: 'confirmed' } }));
+      setConfirmStates(prev => ({ ...prev, [msgId]: { ...(prev[msgId] || {}), [idx]: 'confirmed' } }));
       if (onUploadComplete) onUploadComplete();
-    } catch (err) {
-      setConfirmStates(prev => ({ ...prev, [msgId]: { ...(prev[msgId] || {}), [resultIdx]: 'error' } }));
-      addMessage(`⚠️ Failed to apply update: ${err.message}`, 'bot');
+    } catch {
+      setConfirmStates(prev => ({ ...prev, [msgId]: { ...(prev[msgId] || {}), [idx]: 'error' } }));
     }
   };
 
-  const handleRejectUpdate = (msgId, resultIdx) => {
-    setConfirmStates(prev => ({ ...prev, [msgId]: { ...(prev[msgId] || {}), [resultIdx]: 'rejected' } }));
-  };
+  const handleReject = (msgId, idx) =>
+    setConfirmStates(prev => ({ ...prev, [msgId]: { ...(prev[msgId] || {}), [idx]: 'rejected' } }));
 
-  // ── Text chat (streaming) ────────────────────────────────────────────────────
-  const handleSendText = async () => {
-    if (!inputText.trim()) return;
-    const userQuery = inputText;
+  // ── Text chat ─────────────────────────────────────────────────────────────────
+  const handleSend = async () => {
+    if (!inputText.trim() || isProcessing) return;
+    const userQuery = inputText.trim();
+
+    // Capture history before adding the new user message to state
+    const history = messages
+      .filter(m => m.type === 'text')
+      .map(m => ({ role: m.sender === 'user' ? 'user' : 'assistant', content: m.text }));
+
     addMessage(userQuery, 'user');
     setInputText('');
     setIsProcessing(true);
     setProcessingType('chat');
 
-    const botMsgId = crypto.randomUUID();
+    const botId = crypto.randomUUID();
     let firstChunk = true;
 
     try {
       await streamChatMessage(userQuery, tenderId, (chunk) => {
         if (firstChunk) {
           firstChunk = false;
-          // First token arrived — replace spinner with the streaming bubble
           setIsProcessing(false);
           setMessages(prev => [...prev, {
-            id: botMsgId,
-            sender: 'bot',
-            text: chunk,
-            type: 'text',
-            isStreaming: true,
+            id: botId, sender: 'bot', text: chunk, type: 'text', isStreaming: true,
             time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           }]);
         } else {
-          setMessages(prev => prev.map(m =>
-            m.id === botMsgId ? { ...m, text: m.text + chunk } : m
-          ));
+          setMessages(prev => prev.map(m => m.id === botId ? { ...m, text: m.text + chunk } : m));
         }
-      });
-      // Stream finished — remove cursor
-      setMessages(prev => prev.map(m =>
-        m.id === botMsgId ? { ...m, isStreaming: false } : m
-      ));
+      }, history);
+      setMessages(prev => prev.map(m => m.id === botId ? { ...m, isStreaming: false } : m));
     } catch (err) {
       setIsProcessing(false);
       if (firstChunk) {
-        addMessage(`⚠️ Could not reach AI service: ${err.message}`, 'bot');
+        addMessage(`Could not reach AI: ${err.message}`, 'bot');
       } else {
         setMessages(prev => prev.map(m =>
-          m.id === botMsgId
-            ? { ...m, text: m.text + ` ⚠️ [interrupted]`, isStreaming: false }
-            : m
+          m.id === botId ? { ...m, text: m.text + ' [interrupted]', isStreaming: false } : m
         ));
       }
     } finally {
@@ -459,38 +319,39 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
     }
   };
 
-  // ── File upload ──────────────────────────────────────────────────────────────
-  const handleFileUpload = async (e) => {
-    const file = e.target.files[0];
+  // ── File upload ───────────────────────────────────────────────────────────────
+  const handleUpload = async (e) => {
+    const file = e.target.files?.[0];
     if (!file) return;
+    const err = validatePdfFile(file);
+    if (err) { addMessage(err, 'bot'); if (fileInputRef.current) fileInputRef.current.value = ''; return; }
 
-    const validationError = validatePdfFile(file);
-    if (validationError) {
-      addMessage(`⚠️ ${validationError}`, 'bot');
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      return;
-    }
-
-    addMessage(`📎 Uploading **${file.name}** for AI extraction…`, 'user');
+    addMessage(`Uploading **${file.name}**…`, 'user');
+    setUploadFilename(file.name);
     setIsProcessing(true);
     setProcessingType('upload');
+
     try {
-      // 10 min timeout — matches server-side 600s limit for large PDFs
-      const raw = await withTimeout(uploadFileForProcessing(file, tenderId), 600_000, 'File upload');
-      // raw is a JSON string from CAP action → parse it
+      const raw = await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Timed out after 10 minutes.')), 600_000);
+        uploadFileForProcessing(file, tenderId)
+          .then(r => { clearTimeout(timeout); resolve(r); })
+          .catch(r => { clearTimeout(timeout); reject(r); });
+      });
       const result = typeof raw === 'string' ? JSON.parse(raw) : raw;
-      addMessage({
-        type: 'file-result',
+      const msgId = crypto.randomUUID();
+      setMessages(prev => [...prev, {
+        id: msgId, sender: 'bot', type: 'file-result',
         filename: file.name,
         results: result.results || [],
         message: result.message || '',
-      }, 'bot');
-      // Refresh dashboard if any tenders were created/updated
-      if (result.results && result.results.length > 0 && onUploadComplete) {
-        onUploadComplete();
-      }
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      }]);
+      if (result.results?.length > 0 && onUploadComplete) onUploadComplete();
     } catch (err) {
-      addMessage(`⚠️ File upload failed: ${err.message}`, 'bot');
+      // chatApi.js already formats the message — don't prepend another prefix.
+      // e.g. "HTTP 502 — Could not reach the backend" not "Upload failed: Upload failed: …"
+      addMessage(err.message, 'bot');
     } finally {
       setIsProcessing(false);
       setProcessingType(null);
@@ -498,104 +359,101 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
     }
   };
 
-  // ── Render a single message bubble ──────────────────────────────────────────
-  const renderMessage = (msg) => {
-    if (msg.type === 'file-result') {
-      return (
-        <FileResultMessage
-          filename={msg.filename}
-          results={msg.results}
-          message={msg.message}
-          confirmStates={confirmStates[msg.id] || {}}
-          onConfirm={(idx, resultTenderId, patch, changedFields) =>
-            handleConfirmUpdate(msg.id, idx, resultTenderId, patch, changedFields)}
-          onReject={(idx) => handleRejectUpdate(msg.id, idx)}
-          onViewChanges={(r) => setViewingChanges(r)}
-        />
-      );
-    }
-    if (msg.type === 'followup-request') {
-      return (
-        <div>
-          <MarkdownText text={msg.text} />
-          <div style={{ marginTop: '10px' }}>
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className="btn btn-primary btn-sm"
-              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                <polyline points="17 8 12 3 7 8"></polyline>
-                <line x1="12" y1="3" x2="12" y2="15"></line>
-              </svg>
-              Upload Follow-up File
-            </button>
-          </div>
-        </div>
-      );
-    }
-    return <MarkdownText text={msg.isStreaming ? msg.text + '▋' : msg.text} />;
-  };
-
+  // ── Render ────────────────────────────────────────────────────────────────────
   return (
     <>
       <div className={`chatbot-drawer ${isOpen ? 'open' : ''}`}>
+
+        {/* Header */}
         <div className="chatbot-header">
-          <h3>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+          <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
             </svg>
             Copilot
-            {tenderId && (() => {
-              const activeT = tenders?.find(t => t.id === tenderId);
-              const label = activeT ? (activeT.tenderNo || tenderId) : tenderId;
-              return <span style={{ fontSize: '12px', opacity: 0.7, marginLeft: '8px' }}>• {label}</span>;
-            })()}
+            {tenderLabel && (
+              <span style={{ fontSize: '12px', opacity: 0.6, fontWeight: 400 }}>• {tenderLabel}</span>
+            )}
           </h3>
           <button onClick={onClose} className="btn btn-ghost" style={{ padding: '4px 8px' }}>✕</button>
         </div>
 
+        {/* Messages */}
         <div className="chatbot-messages">
+
+          {/* Context-aware welcome */}
+          <div className="chat-msg bot">
+            <p style={{ margin: 0, fontSize: '14px', lineHeight: '1.55', color: 'var(--text-muted)' }}>
+              {welcomeText}
+            </p>
+            {!tenderId && (
+              <button
+                className="btn btn-primary"
+                style={{ marginTop: '12px', display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '13px', padding: '8px 14px' }}
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isProcessing}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="17 8 12 3 7 8" />
+                  <line x1="12" y1="3" x2="12" y2="15" />
+                </svg>
+                Upload PDF
+              </button>
+            )}
+          </div>
+
+          {/* Conversation */}
           {messages.map(msg => (
             <div key={msg.id} className={`chat-msg ${msg.sender}`}>
-              {renderMessage(msg)}
+              {msg.type === 'file-result' ? (
+                <FileResult
+                  filename={msg.filename}
+                  results={msg.results}
+                  message={msg.message}
+                  confirmStates={confirmStates[msg.id] || {}}
+                  onConfirm={(idx, tid, patch, fields) => handleConfirm(msg.id, idx, tid, patch, fields)}
+                  onReject={(idx) => handleReject(msg.id, idx)}
+                />
+              ) : (
+                <div style={{ margin: 0, fontSize: '14px', lineHeight: '1.55', overflowWrap: 'break-word' }} className="markdown-body">
+                  <ReactMarkdown>{msg.isStreaming ? msg.text + '▋' : msg.text}</ReactMarkdown>
+                </div>
+              )}
               <div className="chat-msg-time">{msg.time}</div>
             </div>
           ))}
+
+          {/* Thinking / upload indicator */}
           {isProcessing && (
             <div className="chat-msg bot">
               {processingType === 'upload' ? (
-                <UploadThinkingMessage />
+                <UploadTimeline filename={uploadFilename} />
               ) : (
-                <div style={{ display: 'flex', gap: '4px', alignItems: 'center', padding: '4px 0' }}>
-                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'currentColor', animation: 'pulse 1s infinite' }} />
-                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'currentColor', animation: 'pulse 1s infinite 0.2s' }} />
-                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'currentColor', animation: 'pulse 1s infinite 0.4s' }} />
+                <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                  {[0, 0.2, 0.4].map((delay, i) => (
+                    <span key={i} style={{ width: 6, height: 6, borderRadius: '50%', background: 'currentColor', animation: `pulse 1s infinite ${delay}s` }} />
+                  ))}
                 </div>
               )}
             </div>
           )}
+
           <div ref={messagesEndRef} />
         </div>
 
+        {/* Input */}
         <div className="chatbot-input-area">
           <div className="chat-form">
-            <input
-              type="file"
-              ref={fileInputRef}
-              style={{ display: 'none' }}
-              onChange={handleFileUpload}
-              accept=".pdf"
-            />
+            <input type="file" ref={fileInputRef} style={{ display: 'none' }} onChange={handleUpload} accept=".pdf" />
             <button
               className="chat-file-btn"
               onClick={() => fileInputRef.current?.click()}
-              title="Upload PDF for extraction"
+              title="Upload PDF"
               disabled={isProcessing}
             >
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
+                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
               </svg>
             </button>
             <input
@@ -603,157 +461,18 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
               className="chat-input"
               placeholder="Ask a question…"
               value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && !isProcessing && handleSendText()}
+              onChange={e => setInputText(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && !isProcessing && handleSend()}
               disabled={isProcessing}
             />
-            <button
-              className="btn btn-primary"
-              onClick={handleSendText}
-              style={{ padding: '10px 16px' }}
-              disabled={isProcessing}
-            >
+            <button className="btn btn-primary" onClick={handleSend} style={{ padding: '10px 16px' }} disabled={isProcessing}>
               Send
             </button>
           </div>
         </div>
       </div>
+
       <div className="drawer-overlay" onClick={onClose} />
-
-      {viewingChanges && (() => {
-        const existingTender = tenders?.find(t => t.id === viewingChanges.tenderId);
-        return (
-          <div className="modal-overlay" style={{ zIndex: 110 }}>
-            <div className="modal-content" style={{ maxWidth: '650px', width: '95vw' }}>
-              <div className="modal-header">
-                <h3>Follow-up Changes — {viewingChanges.tenderNo || tenders.find(t => t.id === viewingChanges.tenderId)?.tenderNo || viewingChanges.tenderId}</h3>
-                <button onClick={() => setViewingChanges(null)} className="btn btn-ghost" style={{ padding: '4px 8px' }}>✕</button>
-              </div>
-              <div className="modal-body" style={{ padding: '20px', minHeight: '320px', display: 'flex', flexDirection: 'column' }}>
-                {/* Tab Navigation */}
-                <div style={{ display: 'flex', borderBottom: '1px solid var(--border-color)', marginBottom: '16px' }}>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('table')}
-                    style={{
-                      padding: '8px 16px',
-                      border: 'none',
-                      background: 'none',
-                      borderBottom: activeTab === 'table' ? '2px solid var(--primary)' : 'none',
-                      color: activeTab === 'table' ? 'var(--primary)' : 'var(--text-muted)',
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      fontSize: '13px',
-                    }}
-                  >
-                    📋 Database Table (Tenders)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('json')}
-                    style={{
-                      padding: '8px 16px',
-                      border: 'none',
-                      background: 'none',
-                      borderBottom: activeTab === 'json' ? '2px solid var(--primary)' : 'none',
-                      color: activeTab === 'json' ? 'var(--primary)' : 'var(--text-muted)',
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      fontSize: '13px',
-                    }}
-                  >
-                    {"{ }"} Whole JSON File
-                  </button>
-                </div>
-
-                {activeTab === 'table' && (
-                  <div style={{ flex: 1 }}>
-                    <p style={{ margin: '0 0 12px 0', fontSize: '13px', color: 'var(--text-muted)' }}>
-                      Comparing current database values against the follow-up PDF values:
-                    </p>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
-                      <thead>
-                        <tr style={{ borderBottom: '2px solid var(--border-color)', textAlign: 'left', backgroundColor: 'var(--bg-page)' }}>
-                          <th style={{ padding: '10px 8px', fontWeight: 600 }}>Field Column</th>
-                          <th style={{ padding: '10px 8px', fontWeight: 600 }}>Current DB Value</th>
-                          <th style={{ padding: '10px 8px', fontWeight: 600 }}>Extracted PDF Value</th>
-                          <th style={{ padding: '10px 8px', fontWeight: 600, textAlign: 'center' }}>Status</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {[
-                          { label: 'Tender No', dbVal: existingTender?.tenderNo, extVal: viewingChanges.extractedValues?.tenderNo },
-                          { label: 'Title',     dbVal: existingTender?.title,    extVal: viewingChanges.extractedValues?.title },
-                          { label: 'Budget',    dbVal: existingTender?.details?.budget,   extVal: viewingChanges.extractedValues?.budget },
-                          { label: 'Deadline',  dbVal: existingTender?.details?.deadline, extVal: viewingChanges.extractedValues?.deadline },
-                          { label: 'Location',  dbVal: existingTender?.details?.location, extVal: viewingChanges.extractedValues?.location },
-                        ].map((item, idx) => {
-                          const dbStr = (item.dbVal === null || item.dbVal === undefined) ? '' : String(item.dbVal).trim();
-                          const extStr = (item.extVal === null || item.extVal === undefined) ? '' : String(item.extVal).trim();
-                          const isChanged = dbStr !== extStr;
-
-                          return (
-                            <tr key={idx} style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: isChanged ? 'rgba(251, 191, 36, 0.05)' : 'transparent' }}>
-                              <td style={{ padding: '10px 8px', fontWeight: 600 }}>{item.label}</td>
-                              <td style={{ padding: '10px 8px', color: 'var(--text-main)', wordBreak: 'break-word' }}>{item.dbVal || '—'}</td>
-                              <td style={{ padding: '10px 8px', color: isChanged ? 'var(--success)' : 'var(--text-main)', fontWeight: isChanged ? 600 : 400, wordBreak: 'break-word' }}>{item.extVal || '—'}</td>
-                              <td style={{ padding: '10px 8px', textAlign: 'center' }}>
-                                {isChanged ? (
-                                  <span style={{
-                                    display: 'inline-block', padding: '2px 8px', borderRadius: '4px',
-                                    fontSize: '11px', fontWeight: 600, background: '#fef3c7', color: '#b45309', border: '1px solid #fcd34d'
-                                  }}>
-                                    Modified
-                                  </span>
-                                ) : (
-                                  <span style={{
-                                    display: 'inline-block', padding: '2px 8px', borderRadius: '4px',
-                                    fontSize: '11px', fontWeight: 500, background: '#f3f4f6', color: '#6b7280', border: '1px solid #e5e7eb'
-                                  }}>
-                                    Unchanged
-                                  </span>
-                                )}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-
-                {activeTab === 'json' && (
-                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-                    <p style={{ margin: '0 0 12px 0', fontSize: '13px', color: 'var(--text-muted)' }}>
-                      Complete raw JSON payload extracted from the follow-up file by the Python AI Service:
-                    </p>
-                    <pre style={{
-                      backgroundColor: '#1e1e1e',
-                      color: '#d4d4d4',
-                      padding: '16px',
-                      borderRadius: '8px',
-                      overflow: 'auto',
-                      maxHeight: '320px',
-                      fontSize: '12px',
-                      fontFamily: 'Consolas, Monaco, monospace',
-                      textAlign: 'left',
-                      margin: 0,
-                      flex: 1
-                    }}>
-                      {JSON.stringify(viewingChanges.rawJson, null, 2)}
-                    </pre>
-                  </div>
-                )}
-              </div>
-              <div className="modal-footer" style={{ padding: '12px 20px' }}>
-                <button onClick={() => setViewingChanges(null)} className="btn btn-primary">
-                  Close
-                </button>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
     </>
   );
 }

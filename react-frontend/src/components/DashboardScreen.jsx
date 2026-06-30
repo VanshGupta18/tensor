@@ -3,272 +3,233 @@ import RemarksModal from './RemarksModal';
 import StatusBadge from './StatusBadge';
 
 export default function DashboardScreen({
-  username,
   tenders,
   loading,
   error,
-  onLogout,
   onShowDetails,
   onOpenChat,
-  onOpenFollowUp,
   onPrefetchDocuments,
   onDelete,
 }) {
-  const [remarksTarget, setRemarksTarget] = useState(null); // null = closed, 'all' = global, tender obj = per-row
-  const [searchQuery, setSearchQuery] = useState('');
+  const [remarksTarget, setRemarksTarget] = useState(null);
+  const [searchQuery,   setSearchQuery]   = useState('');
 
   const filteredTenders = tenders.filter((t) => {
     if (!searchQuery) return true;
-    const query = searchQuery.trim().toLowerCase();
-    return (t.tenderNo || '').toLowerCase().includes(query);
+    const q = searchQuery.trim().toLowerCase();
+    return (
+      (t.tenderNo || '').toLowerCase().includes(q) ||
+      (t.title    || '').toLowerCase().includes(q)
+    );
   });
 
-  const btnStyle = {
-    padding: '4px 10px',
-    fontSize: '12px',
-    border: '1px solid var(--border-color)',
-    lineHeight: 1.4,
-  };
-
   return (
-    <div className="dashboard-wrapper">
-      <main className="main-content">
-        {/* Top Navigation */}
-        <header className="top-nav">
-          <h1>TenderFlow Dashboard</h1>
-          <div className="nav-actions">
-            <div className="user-badge">
-              <div className="user-avatar">{username ? username.charAt(0).toUpperCase() : '?'}</div>
-              {username}
-            </div>
-            <button onClick={onLogout} className="btn btn-ghost" style={{ color: 'var(--danger)' }}>
-              Sign out
-            </button>
-          </div>
-        </header>
-
-        {/* Data Table Area */}
-        <div className="panel">
-          <div className="table-header" style={{ padding: '20px 24px 0', flexWrap: 'wrap', gap: '16px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: '280px' }}>
-              <h2>Active Tenders</h2>
-              <div className="search-bar-wrapper" style={{ position: 'relative', width: '240px' }}>
-                <input
-                  type="text"
-                  placeholder="Search by tender No..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="search-input"
-                  style={{
-                    padding: '8px 12px 8px 36px',
-                    fontSize: '13px',
-                    width: '100%',
-                    border: '1px solid var(--border-color)',
-                    borderRadius: 'var(--radius-md)',
-                    backgroundColor: 'var(--bg-page)',
-                    outline: 'none',
-                    transition: 'all 0.15s ease-in-out',
-                  }}
-                  onFocus={(e) => {
-                    e.target.style.borderColor = 'var(--primary)';
-                    e.target.style.backgroundColor = 'var(--bg-card)';
-                    e.target.style.boxShadow = '0 0 0 3px rgba(37, 99, 235, 0.1)';
-                  }}
-                  onBlur={(e) => {
-                    e.target.style.borderColor = 'var(--border-color)';
-                    e.target.style.backgroundColor = 'var(--bg-page)';
-                    e.target.style.boxShadow = 'none';
-                  }}
-                />
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="var(--text-muted)"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  style={{
-                    position: 'absolute',
-                    left: '12px',
-                    top: '50%',
-                    transform: 'translateY(-50%)',
-                    pointerEvents: 'none'
-                  }}
-                >
-                  <circle cx="11" cy="11" r="8"></circle>
-                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-                </svg>
-                {searchQuery && (
-                  <button
-                    onClick={() => setSearchQuery('')}
-                    style={{
-                      position: 'absolute',
-                      right: '10px',
-                      top: '50%',
-                      transform: 'translateY(-50%)',
-                      background: 'none',
-                      border: 'none',
-                      cursor: 'pointer',
-                      color: 'var(--text-muted)',
-                      padding: 0,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}
-                    title="Clear search"
-                  >
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <line x1="18" y1="6" x2="6" y2="18"></line>
-                      <line x1="6" y1="6" x2="18" y2="18"></line>
-                    </svg>
-                  </button>
-                )}
-              </div>
-            </div>
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-              <button
-                onClick={() => onOpenChat()}
-                className="btn btn-secondary"
-                style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                  <polyline points="17 8 12 3 7 8"></polyline>
-                  <line x1="12" y1="3" x2="12" y2="15"></line>
-                </svg>
-                Upload
-              </button>
-              <button onClick={() => setRemarksTarget('all')} className="btn btn-primary">
-                All Remarks
-              </button>
-            </div>
-          </div>
-
-          <div className="data-table-container" style={{ padding: '20px' }}>
-            {loading && (
-              <div style={{ overflowX: 'auto' }}>
-                <table className="data-table">
-                  <tbody>
-                    {Array.from({ length: 6 }).map((_, i) => (
-                      <tr key={i}>
-                        {[45, 30, 55, 28, 38, 35, 35, 70].map((w, j) => (
-                          <td key={j}>
-                            <div style={{
-                              height: '14px', borderRadius: '4px',
-                              background: 'linear-gradient(90deg, var(--bg-hover) 25%, #e9eaec 50%, var(--bg-hover) 75%)',
-                              backgroundSize: '400% 100%',
-                              animation: 'shimmer 1.4s ease infinite',
-                              animationDelay: `${(i * 8 + j) * 0.03}s`,
-                              width: `${w}%`,
-                            }} />
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            {!loading && error && (
-              <div className="error-msg" style={{ margin: '16px 0' }}>
-                ⚠️ {error} — showing local data if available.
-              </div>
-            )}
-
-            {!loading && (
-              <div style={{ overflowX: 'auto' }}>
-                <table className="data-table" style={{ minWidth: '700px' }}>
-                  <thead>
-                    <tr>
-                      <th>Tender No</th>
-                      <th>Version</th>
-                      <th>Title</th>
-                      <th>Status</th>
-                      <th>Created By</th>
-                      <th>Last Reviewed</th>
-                      <th>Last Changed</th>
-                      <th style={{ textAlign: 'right' }}>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredTenders.map((t) => (
-                      <tr
-                        key={t.id}
-                        onMouseEnter={() => onPrefetchDocuments?.(t.id)}
-                        onClick={() => onShowDetails(t)}
-                        style={{ cursor: 'pointer' }}
-                        title="Click row to view details"
-                      >
-                        <td style={{ fontWeight: 500 }}>{t.tenderNo || t.id}</td>
-                        <td>v{t.version}</td>
-                        <td>{t.title}</td>
-                        <td>
-                          <StatusBadge status={t.details?.status} />
-                        </td>
-                        <td>{t.createdBy}</td>
-                        <td>{t.lastReviewedBy}</td>
-                        <td>{t.lastChangedBy}</td>
-                        <td onClick={(e) => e.stopPropagation()} style={{ textAlign: 'right', whiteSpace: 'nowrap', cursor: 'default' }}>
-                          <div style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
-                            <button onClick={(e) => { e.stopPropagation(); onShowDetails(t); }} className="btn btn-secondary" style={btnStyle}>
-                              Details
-                            </button>
-                            <button onClick={(e) => { e.stopPropagation(); setRemarksTarget(t); }} className="btn btn-secondary" style={btnStyle}>
-                              Remarks
-                            </button>
-                            <button onClick={(e) => { e.stopPropagation(); onOpenFollowUp(t); }} className="btn btn-secondary" style={btnStyle}>
-                              Follow-up
-                            </button>
-                            {onDelete && (
-                              <button
-                                onClick={(e) => { e.stopPropagation(); onDelete(t); }}
-                                title="Delete tender"
-                                style={{
-                                  ...btnStyle,
-                                  padding: '4px 7px',
-                                  color: 'var(--danger)',
-                                  background: 'transparent',
-                                  border: '1px solid transparent',
-                                  borderRadius: 'var(--radius-md)',
-                                  cursor: 'pointer',
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  lineHeight: 1,
-                                }}
-                                onMouseEnter={e => { e.currentTarget.style.background = 'var(--danger-bg)'; e.currentTarget.style.borderColor = 'var(--danger)'; }}
-                                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'transparent'; }}
-                              >
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                  <polyline points="3 6 5 6 21 6" />
-                                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-                                  <path d="M10 11v6M14 11v6" />
-                                  <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-                                </svg>
-                              </button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                    {filteredTenders.length === 0 && !loading && (
-                      <tr>
-                        <td colSpan="8" style={{ textAlign: 'center', padding: '32px', color: 'var(--text-muted)' }}>
-                          No tenders found.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            )}
+    <>
+      {/* ── Topbar ─────────────────────────────────────────────── */}
+      <header className="topbar">
+        <div className="tb-title">
+          <h1 className="tb-h1">Tenders</h1>
+          <div className="tb-crumb">
+            <span>Procurement</span>
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+              <polyline points="9 18 15 12 9 6"/>
+            </svg>
+            <span>Active Tenders</span>
           </div>
         </div>
-      </main>
+        <div className="tb-acts">
+          <button
+            className="btn btn-sec"
+            onClick={() => onOpenChat()}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            Upload PDF
+          </button>
+          <button
+            className="btn btn-ai"
+            onClick={() => onOpenChat()}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+            </svg>
+            AI Copilot
+          </button>
+        </div>
+      </header>
 
-      {/* Remarks Modal — per-row or global */}
+      {/* ── Page body ──────────────────────────────────────────── */}
+      <div className="page-body">
+        {error && (
+          <div className="error-msg" style={{ marginBottom: '16px' }}>
+            ⚠️ {error} — showing local data if available.
+          </div>
+        )}
+
+        <div className="panel">
+          {/* Panel header */}
+          <div className="panel-head">
+            <span className="panel-title">Active Tenders</span>
+            <span className="count-chip">{filteredTenders.length}</span>
+            <div style={{ flex: 1 }} />
+
+            {/* Search */}
+            <div className="srch-wrap">
+              <svg className="srch-ico" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <circle cx="11" cy="11" r="8"/>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+              </svg>
+              <input
+                type="text"
+                className="srch-in"
+                placeholder="Search by tender no…"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                aria-label="Search tenders"
+              />
+              {searchQuery && (
+                <button
+                  className="srch-clear"
+                  onClick={() => setSearchQuery('')}
+                  title="Clear search"
+                  aria-label="Clear search"
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <line x1="18" y1="6" x2="6" y2="18"/>
+                    <line x1="6" y1="6" x2="18" y2="18"/>
+                  </svg>
+                </button>
+              )}
+            </div>
+
+            <button
+              onClick={() => setRemarksTarget('all')}
+              className="btn btn-ghost"
+              style={{ fontSize: '12.5px', padding: '5px 11px' }}
+            >
+              All Remarks
+            </button>
+          </div>
+
+          {/* Skeleton loader */}
+          {loading && (
+            <div className="tbl-wrap">
+              <table className="tbl" style={{ minWidth: '700px' }}>
+                <tbody>
+                  {Array.from({ length: 6 }).map((_, i) => (
+                    <tr key={i}>
+                      {[140, 240, 90, 40, 90, 90, 120].map((w, j) => (
+                        <td key={j} style={{ padding: '12px 14px' }}>
+                          <div style={{
+                            height: '13px', borderRadius: '4px', width: `${w}px`, maxWidth: '100%',
+                            background: 'linear-gradient(90deg, var(--edge-lt) 25%, #e4e6f0 50%, var(--edge-lt) 75%)',
+                            backgroundSize: '400% 100%',
+                            animation: 'shimmer 1.4s ease infinite',
+                            animationDelay: `${(i * 7 + j) * 0.03}s`,
+                          }} />
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Table */}
+          {!loading && (
+            <div className="tbl-wrap">
+              <table className="tbl" style={{ minWidth: '700px' }} aria-label="Tender list">
+                <thead>
+                  <tr>
+                    <th scope="col">Tender No</th>
+                    <th scope="col">Title</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Ver</th>
+                    <th scope="col">Created By</th>
+                    <th scope="col">Last Reviewed</th>
+                    <th scope="col" style={{ textAlign: 'right' }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredTenders.map((t) => (
+                    <tr
+                      key={t.id}
+                      onMouseEnter={() => onPrefetchDocuments?.(t.id)}
+                      onClick={() => onShowDetails(t)}
+                      title="Click to view details"
+                    >
+                      <td><span className="t-no">{t.tenderNo || t.id}</span></td>
+                      <td><span className="t-title">{t.title}</span></td>
+                      <td><StatusBadge status={t.details?.status} /></td>
+                      <td><span className="t-ver">v{t.version}</span></td>
+                      <td className="t-user">{t.createdBy}</td>
+                      <td className="t-user">{t.lastReviewedBy || '—'}</td>
+                      <td
+                        onClick={(e) => e.stopPropagation()}
+                        style={{ cursor: 'default' }}
+                      >
+                        <div className="row-acts">
+                          <button
+                            className="ract"
+                            onClick={() => onShowDetails(t)}
+                          >
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                              <circle cx="12" cy="12" r="3"/>
+                            </svg>
+                            Details
+                          </button>
+                          <button
+                            className="ract"
+                            onClick={() => setRemarksTarget(t)}
+                          >
+                            Remarks
+                          </button>
+                          <button
+                            className="ract ract-ai"
+                            onClick={() => onOpenChat(t)}
+                          >
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                            </svg>
+                            Copilot
+                          </button>
+                          {onDelete && (
+                            <button
+                              className="ract ract-del"
+                              onClick={() => onDelete(t)}
+                              title="Delete tender"
+                              aria-label={`Delete ${t.tenderNo || t.id}`}
+                            >
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                                <polyline points="3 6 5 6 21 6"/>
+                                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                                <path d="M10 11v6M14 11v6"/>
+                                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                              </svg>
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {filteredTenders.length === 0 && (
+                    <tr>
+                      <td colSpan="7" className="tbl-empty">No tenders found.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Remarks Modal */}
       {remarksTarget && (
         <RemarksModal
           tenders={tenders}
@@ -276,6 +237,6 @@ export default function DashboardScreen({
           onClose={() => setRemarksTarget(null)}
         />
       )}
-    </div>
+    </>
   );
 }

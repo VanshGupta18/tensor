@@ -556,38 +556,49 @@ export default function DetailsScreen({
   // ─────────────────────────────────────────────────────────────────────────────
 
   return (
-    <div className="dashboard-wrapper">
-      <main className="main-content details-page">
-        <button onClick={onBack} className="btn btn-ghost" style={{ marginBottom: '24px', paddingLeft: 0 }}>
-          ← Back to Dashboard
+    <>
+      {/* ── Topbar ───────────────────────────────────────────── */}
+      <header className="topbar">
+        <button onClick={onBack} className="btn btn-ghost" style={{ paddingLeft: 0, gap: 6 }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+            <polyline points="15 18 9 12 15 6"/>
+          </svg>
+          Back
         </button>
-
-        <div className="details-header">
-          <div className="details-title-group">
-            <h2>{tender.tenderNo || tender.id}</h2>
-            <p>Version {tender.version} • Current Status: {tender.details.status}</p>
-          </div>
-          <div className="nav-actions">
-            {!isEditing ? (
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                <button onClick={() => setIsEditing(true)} className="btn btn-secondary">Edit</button>
-                <button
-                  onClick={handleDownload}
-                  disabled={pdfLoading}
-                  className="btn btn-secondary"
-                  title={pdfError ? `PDF error: ${pdfError}` : undefined}
-                >
-                  {pdfLoading ? 'Preparing PDF…' : pdfError ? 'Download ⚠️' : 'Download'}
-                </button>
-              </div>
-            ) : (
-              <>
-                <button onClick={handleCancelEdit} className="btn btn-ghost">Cancel</button>
-                <button onClick={handleSubmitClick} className="btn btn-primary">Review & Save</button>
-              </>
-            )}
+        <div className="tb-title">
+          <h1 className="tb-h1">{tender.tenderNo || tender.id}</h1>
+          <div className="tb-crumb">
+            Version {tender.version}
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+              <polyline points="9 18 15 12 9 6"/>
+            </svg>
+            {tender.details.status}
           </div>
         </div>
+        <div className="tb-acts">
+          {!isEditing ? (
+            <>
+              <button onClick={() => setIsEditing(true)} className="btn btn-sec">Edit</button>
+              <button
+                onClick={handleDownload}
+                disabled={pdfLoading}
+                className="btn btn-sec"
+                title={pdfError ? `PDF error: ${pdfError}` : undefined}
+              >
+                {pdfLoading ? 'Preparing…' : pdfError ? 'Download ⚠️' : 'Download'}
+              </button>
+            </>
+          ) : (
+            <>
+              <button onClick={handleCancelEdit} className="btn btn-ghost">Cancel</button>
+              <button onClick={handleSubmitClick} className="btn btn-primary">Review & Save</button>
+            </>
+          )}
+        </div>
+      </header>
+
+      <div className="page-body">
+      <div className="details-page">
 
         {/* ── Editable Tender Fields ───────────────────────────────────────── */}
         <div className="panel">
@@ -779,11 +790,13 @@ export default function DetailsScreen({
             <div><strong>Modified:</strong> {tender.lastChangedBy}</div>
           </div>
         </div>
-      </main>
+
+      </div>{/* details-page */}
+      </div>{/* page-body */}
 
       {showRemarksModal && (
         <SubmitRemarksModal tenderNo={tender.tenderNo} changedFields={changedFields} onCancel={() => setShowRemarksModal(false)} onSave={handleSaveFinal} />
       )}
-    </div>
+    </>
   );
 }

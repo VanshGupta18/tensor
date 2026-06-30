@@ -27,93 +27,11 @@ const FormData = require('form-data');
 
 const PYTHON_AI_URL = process.env.PYTHON_AI_URL || 'http://localhost:8000';
 
-// ── Streaming chat route (/api/stream-chat) ───────────────────────────────────
-// Registered at bootstrap so it sits before CAP's OData middleware.
-// Proxies Python SSE chunks directly to the browser, then persists the full
-// reply to HANA after the stream ends.
-// Registered under both paths: Vite dev proxy strips /api prefix (/stream-chat),
-// while production (React built into CAP app/) uses /api/stream-chat directly.
-cds.on('bootstrap', (app) => {
-  const streamChatHandler = async (req, res) => {
-    const { message, tenderId } = req.body || {};
-    if (!message) return res.status(400).json({ error: 'message is required' });
-
-    // Auth guard: bootstrap routes run before CAP middleware so @requires annotations
-    // do not cover them. In XSUAA mode, enforce presence of an Authorization header.
-    // Full JWT validation happens in CAP middleware for OData routes — add XSUAA
-    // passport middleware here if this route needs to be fully secured in production.
-    if (cds.env.requires?.auth?.kind === 'xsuaa' && !req.headers.authorization) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-
-    // Persist user message (non-blocking — don't delay the stream)
-    cds.db?.run(
-      INSERT.into('TenderService.ChatHistories').entries({
-        ID: cds.utils.uuid(),
-        tender_ID: tenderId || null,
-        sender: 'user',
-        message,
-        timestamp: new Date().toISOString(),
-      })
-    ).catch(e => console.error('[stream-chat] user insert failed:', e.message));
-
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no');
-    res.flushHeaders();
-
-    let fullReply = '';
-
-    try {
-      const pyRes = await axios.post(
-        `${PYTHON_AI_URL}/stream-response`,
-        { message, tenderId },
-        { responseType: 'stream', timeout: 62_000 }
-      );
-
-      pyRes.data.on('data', (chunk) => {
-        const raw = chunk.toString();
-        res.write(raw);
-        // Accumulate text for DB persistence
-        for (const line of raw.split('\n')) {
-          if (line.startsWith('data: ') && line !== 'data: [DONE]') {
-            try { const p = JSON.parse(line.slice(6)); if (p.text) fullReply += p.text; } catch {}
-          }
-        }
-      });
-
-      pyRes.data.on('end', async () => {
-        res.end();
-        if (fullReply) {
-          cds.db?.run(
-            INSERT.into('TenderService.ChatHistories').entries({
-              ID: cds.utils.uuid(),
-              tender_ID: tenderId || null,
-              sender: 'bot',
-              message: fullReply,
-              timestamp: new Date().toISOString(),
-            })
-          ).catch(e => console.error('[stream-chat] bot insert failed:', e.message));
-        }
-      });
-
-      pyRes.data.on('error', (err) => {
-        console.error('[stream-chat] stream error:', err.message);
-        res.write(`data: ${JSON.stringify({ error: err.message })}\n\ndata: [DONE]\n\n`);
-        res.end();
-      });
-
-    } catch (err) {
-      console.error('[stream-chat] Python call failed:', err.message);
-      res.write(`data: ${JSON.stringify({ error: err.message })}\n\ndata: [DONE]\n\n`);
-      res.end();
-    }
-  };
-  app.post('/api/stream-chat', streamChatHandler); // production: React served by CAP
-  app.post('/stream-chat', streamChatHandler);     // dev: Vite proxy strips /api prefix
-});
-
+// ─────────────────────────────────────────────────────────────────────────────
+// NOTE: stream-chat express routes are registered in server.js bootstrap,
+// not here. cds.on('bootstrap') in service implementations fires after the
+// bootstrap event has already occurred, so routes registered here are never
+// reached and the client receives 404. See server.js for all custom routes.
 // ─────────────────────────────────────────────────────────────────────────────
 module.exports = cds.service.impl(async function (srv) {
 
@@ -559,8 +477,20 @@ module.exports = cds.service.impl(async function (srv) {
       timestamp
     }));
 
+    let pythonTenderRef = tenderId;
+    if (tenderId) {
+      try {
+        const tender = await SELECT.one.from('TenderService.Tenders').columns('tenderNo').where({ ID: tenderId });
+        if (tender && tender.tenderNo) {
+          pythonTenderRef = tender.tenderNo;
+        }
+      } catch (e) {
+        console.error('[TenderService] failed to fetch tenderNo for chat:', e.message);
+      }
+    }
+
     const pyCall = axios
-      ? axios.post(`${PYTHON_AI_URL}/response`, { message, tenderId, user: reqUser }, { timeout: 60_000 })
+      ? axios.post(`${PYTHON_AI_URL}/response`, { message, tenderId: pythonTenderRef, user: reqUser }, { timeout: 60_000 })
           .then(r => r.data?.reply || r.data?.response || JSON.stringify(r.data))
           .catch(err => {
             console.error('[TenderService] Python chat error:', err.message);

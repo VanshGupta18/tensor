@@ -99,6 +99,8 @@ def get_result(token, API_URL, payload, retries=3, timeout=600):
             resp = _session.post(API_URL, json=payload, headers=headers, timeout=timeout)
             resp.raise_for_status()
             response_json = resp.json()
+            _u = response_json.get("usage", {})
+            print(f"[tokens] in={_u.get('input_tokens','?')} out={_u.get('output_tokens','?')} cache_write={_u.get('cache_creation_input_tokens',0)} cache_read={_u.get('cache_read_input_tokens',0)}")
             content_list = response_json.get("content")
             if not content_list or not isinstance(content_list, list):
                 raise ValueError(f"Unexpected API response shape: {list(response_json.keys())}")
@@ -138,7 +140,10 @@ def get_result_tool_use(token, API_URL, payload, retries=3, timeout=600):
         try:
             resp = _session.post(API_URL, json=payload, headers=headers, timeout=timeout)
             resp.raise_for_status()
-            content_list = resp.json().get("content", [])
+            _rj = resp.json()
+            _u = _rj.get("usage", {})
+            print(f"[tokens] in={_u.get('input_tokens','?')} out={_u.get('output_tokens','?')} cache_write={_u.get('cache_creation_input_tokens',0)} cache_read={_u.get('cache_read_input_tokens',0)}")
+            content_list = _rj.get("content", [])
             for item in content_list:
                 if isinstance(item, dict) and item.get("type") == "tool_use":
                     return item["input"]
@@ -348,11 +353,16 @@ RULES:
 7. PRICE VARIATION: For each material row in the price variation / escalation table: (a) material_N_name = full item name as printed; (b) material_N_formula = the complete formula expression PLUS all variable definitions exactly as written in the document (do not abbreviate); (c) material_N_index_source = the exact IEEMA circular code and effective date, e.g. "IEEMA/PVC/CONDUCTOR/2012 (eff. 1 Apr 2012)". Extract every row in the table — there may be 6–10 materials."""
     return {
         "messages": [
-            {"role": "user", "content": prompt},
-            {"role": "user", "content": [{"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": encoded}}]}
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt, "cache_control": {"type": "ephemeral"}},
+                    {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": encoded}},
+                ],
+            }
         ],
-        "max_tokens": 4000,
-        "anthropic_version": "bedrock-2023-05-31"
+        "max_tokens": 6000,
+        "anthropic_version": "bedrock-2023-05-31",
     }
 
 def generate_payload_extract_facts_vision(images_b64: list) -> dict:
@@ -509,12 +519,12 @@ RULES:
 5. DOCUMENTS: bid-stage Envelope 1 documents only (forms by number+name, eligibility certs, financial statements, BGs). Exclude design drawings, as-built drawings, safety plans, PPE lists, post-award deliverables.
 6. Numbers that are ONLY numbers: estimated_cost_amount, tender_fee_amount, emd_percentage, bid_validity_days, performance_security_percent, cpg_supply_percent, cpg_erection_percent, completion_time_months, defect_liability_months, ld_rate_per_week_percent, ld_cap_percent, maat_percentage, liquid_assets_percentage, milestone_1_percent, milestone_2_percent — write digits only, no units.
 7. PRICE VARIATION: For each material row in the price variation / escalation table: (a) material_N_name = full item name as printed; (b) material_N_formula = the complete formula expression PLUS all variable definitions exactly as written in the document (do not abbreviate); (c) material_N_index_source = the exact IEEMA circular code and effective date, e.g. "IEEMA/PVC/CONDUCTOR/2012 (eff. 1 Apr 2012)". Extract every row in the table — there may be 6–10 materials."""
-    content = [{"type": "text", "text": prompt}]
+    content = [{"type": "text", "text": prompt, "cache_control": {"type": "ephemeral"}}]
     for img in images_b64:
         content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": img}})
     return {
         "messages": [{"role": "user", "content": content}],
-        "max_tokens": 4000,
+        "max_tokens": 6000,
         "anthropic_version": "bedrock-2023-05-31"
     }
 
@@ -883,7 +893,7 @@ def synthesize_final_json(token, API_URL, merged_facts: dict) -> dict:
     SAP AI Core proxy does not forward the tools parameter.
     Input is the output of merge_chunk_facts() — a structured dict, not raw text.
     """
-    prompt = f"""You are an expert data extraction AI for Power Sector EPC tenders.
+    static_prefix = f"""You are an expert data extraction AI for Power Sector EPC tenders.
 Facts have been extracted and deduplicated from all chunks of a large tender document.
 Use the structure_tender_data tool to organize ALL facts into the canonical format.
 
@@ -899,14 +909,19 @@ F. CONTACTS: The contacts array must contain UNIQUE individuals only. If the sam
 G. VARIANTS: When an attribute appears as attr[variant_1] and attr[variant_2], pick the most specific/complete value. Do not use "variant_" prefixes in the output.
 H. PRICE VARIATION: Build the materials array from the extracted material_N_name / material_N_formula / material_N_index_source triplets. Each entry must have name, formula (exact expression as extracted), and index_source (exact publication name as extracted). If composite_formula is present, include it at the top level. Do not paraphrase or abbreviate formulas or index source names.
 
-STRUCTURED EXTRACTED FACTS (deduplicated across all document chunks):
-{_format_merged_for_synthesis(merged_facts)}"""
+STRUCTURED EXTRACTED FACTS (deduplicated across all document chunks):"""
 
     payload = {
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": static_prefix, "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": _format_merged_for_synthesis(merged_facts)},
+            ],
+        }],
         "tools": [_TENDER_TOOL_SCHEMA],
         "tool_choice": {"type": "tool", "name": "structure_tender_data"},
-        "max_tokens": 16000,
+        "max_tokens": 8192,
         "anthropic_version": "bedrock-2023-05-31",
     }
     result = get_result_tool_use(token, API_URL, payload)
@@ -1187,31 +1202,301 @@ def synonym_based_validation(synthesized: dict, merged_facts: dict) -> dict:
     print(f"[validation] {patched} field(s) patched from synonym search.")
     return result
 
-def generate_chat_response(token, API_URL, message, tender_id=""):
-    context = f" The user is asking about tender '{tender_id}'." if tender_id else ""
-    prompt = (
-        f"You are an AI assistant helping with tender document management.{context}\n\n"
-        f"User question: {message}\n\n"
-        "Provide a concise answer in under 150 words."
+# ─────────────────────────────────────────────────────────────────────────────
+# PASS 1.7 — TARGETED RETRIEVAL
+# After synthesis, keyword-search the full PDF for critical missing fields and
+# run a small focused AI call to recover each one. Only fires for gaps.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _extract_pdf_page_texts(pdf_path: str) -> list:
+    reader = PdfReader(pdf_path)
+    pages = []
+    for i, page in enumerate(reader.pages, 1):
+        text = (page.extract_text() or "").strip()
+        if text:
+            pages.append((i, text))
+    return pages
+
+def _top_pages(page_texts: list, keywords: list, n: int = 8) -> list:
+    kw = [k.lower() for k in keywords]
+    scored = sorted(
+        ((sum(1 for k in kw if k in t.lower()), pn, t)
+         for pn, t in page_texts if any(k in t.lower() for k in kw)),
+        reverse=True,
     )
+    return [(pn, t) for _, pn, t in scored[:n]]
+
+def _deep_fill(target: dict, patch: dict):
+    """Fill null/absent fields in target from patch. Never overwrites existing data."""
+    for k, v in patch.items():
+        if v in (None, [], {}):
+            continue
+        if k not in target or target[k] in (None, [], {}):
+            target[k] = v
+        elif isinstance(v, dict) and isinstance(target.get(k), dict):
+            _deep_fill(target[k], v)
+        elif isinstance(v, list) and isinstance(target.get(k), list) and not target[k]:
+            target[k] = v
+
+_RETRIEVAL_GROUPS = [
+    {
+        "name": "defect_liability",
+        "check": lambda t: _get_nested(t, "contract_conditions.defect_liability_period_months") in (None, 0),
+        "keywords": ["defect liability", "defect liab", "dlp", "maintenance period"],
+        "max_pages": 6,
+        "section_key": "contract_conditions",
+        "prompt": (
+            "Extract ONLY defect liability period details from the pages below.\n"
+            'Return JSON: {"contract_conditions": {"defect_liability_period_months": <number or null>,'
+            ' "defect_liability_from": "<string or null>"}}'
+        ),
+    },
+    {
+        "name": "payment_milestones",
+        "check": lambda t: not _get_nested(t, "payment_terms.progressive_payments"),
+        "keywords": ["advance", "payment", "milestone", "supply", "erection",
+                     "progressive", "installment", "dispatch", "delivery"],
+        "max_pages": 10,
+        "section_key": "payment_terms",
+        "prompt": (
+            "Extract ALL payment terms from the pages below.\n"
+            'Return JSON: {"payment_terms": {"advance_payments": [{"component": "...", '
+            '"percentage": <number>, "conditions": ["..."]}], '
+            '"progressive_payments": [{"component": "...", "milestone": "...", "percentage": <number>}], '
+            '"standard_timeline_days": <number or null>, "delayed_interest_rate": "<string or null>"}}\n'
+            "Capture EVERY milestone row. Percentages must be numbers."
+        ),
+    },
+    {
+        "name": "qualification_options",
+        "check": lambda t: not _get_nested(t, "eligibility_and_qualification.technical.options"),
+        "keywords": ["option a", "option b", "option c", "similar work",
+                     "70%", "40%", "30%", "experience", "qualification criteria"],
+        "max_pages": 8,
+        "section_key": "eligibility_and_qualification",
+        "prompt": (
+            "Extract technical qualification options from the pages below.\n"
+            'Return JSON: {"eligibility_and_qualification": {"technical": {"heading_note": "...", '
+            '"options": [{"option": "A", "requirement": "..."}], '
+            '"similar_works_definition": "..."}}}\n'
+            "Quote requirements verbatim."
+        ),
+    },
+    {
+        "name": "financial_criteria",
+        "check": lambda t: not _get_nested(t, "eligibility_and_qualification.financial"),
+        "keywords": ["turnover", "maat", "average annual", "net worth", "liquid assets",
+                     "solvency", "pending litigation", "financial capability"],
+        "max_pages": 6,
+        "section_key": "eligibility_and_qualification",
+        "prompt": (
+            "Extract financial eligibility criteria from the pages below.\n"
+            'Return JSON: {"eligibility_and_qualification": {"financial": ['
+            '{"criterion": "MAAT", "requirement": "..."}, ...]}}\n'
+            "Capture MAAT, net worth, liquid assets, pending litigation."
+        ),
+    },
+    {
+        "name": "price_variation",
+        "check": lambda t: not _get_nested(t, "price_variation.materials") and not _get_nested(t, "price_variation.composite_formula"),
+        "keywords": ["price variation", "price adjustment", "escalation", "ieema"],
+        "max_pages": 10,
+        "section_key": "price_variation",
+        "prompt": (
+            "Extract ALL price variation and escalation details from the pages below.\n"
+            'Return JSON: {"price_variation": {"is_applicable": true, "firm_components": ["..."], '
+            '"variable_components": ["..."], "composite_formula": "...", '
+            '"materials": [{"name": "...", "formula": "...", "index_source": "..."}]}}\n'
+            "Capture COMPLETE formulas exactly as written. Extract EVERY material row."
+        ),
+    },
+]
+
+def targeted_retrieval(token_fn, API_URL: str, pdf_path: str, synthesized: dict) -> dict:
+    """Pass 1.7 — keyword-search full PDF for critical missing fields;
+    recover each with a focused AI call. Only fires for gaps, so it's
+    effectively free when Pass 1 worked well."""
+    import copy
+    page_texts = _extract_pdf_page_texts(pdf_path)
+    if not page_texts:
+        return synthesized
+
+    result = copy.deepcopy(synthesized)
+    tender = (result.get("tenders") or [{}])[0]
+    patched = 0
+
+    for group in _RETRIEVAL_GROUPS:
+        try:
+            needs = group["check"](tender)
+        except Exception:
+            needs = True
+        if not needs:
+            continue
+
+        print(f"[retrieval] '{group['name']}' missing — scanning {len(page_texts)} pages")
+        pages = _top_pages(page_texts, group["keywords"], group["max_pages"])
+        if not pages:
+            print(f"[retrieval] '{group['name']}': no keyword hits in PDF")
+            continue
+
+        page_block = "\n\n---\n".join(f"[PAGE {pn}]\n{text}" for pn, text in pages)
+        prompt = f"{group['prompt']}\n\nDOCUMENT PAGES:\n{page_block}"
+
+        token = token_fn() if callable(token_fn) else token_fn
+        payload = {
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 2000,
+            "anthropic_version": "bedrock-2023-05-31",
+        }
+        try:
+            raw = get_result(token, API_URL, payload, retries=2, timeout=120)
+            patch = parse_ai_json(raw)
+            sk = group["section_key"]
+            if sk in patch and patch[sk]:
+                _deep_fill(tender.setdefault(sk, {}), patch[sk])
+                print(f"[retrieval] '{group['name']}': patched {sk}")
+                patched += 1
+        except Exception as e:
+            print(f"[retrieval] '{group['name']}' error: {e}")
+
+    print(f"[retrieval] {patched} section(s) recovered")
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PASS 2.5 — CORRECTNESS VALIDATION
+# Arithmetic and cross-field consistency checks. Logs warnings; does not
+# modify data — a flagged issue is evidence to investigate, not auto-patch.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def validate_correctness(synthesized: dict) -> dict:
+    import re as _re3
+    tender = (synthesized.get("tenders") or [{}])[0]
+    issues = []
+
+    pt = tender.get("payment_terms") or {}
+
+    # 1. Payment milestone sum-to-100 per component group
+    milestones = pt.get("progressive_payments") or []
+    for label in ("supply", "erection"):
+        rows = [r for r in milestones if label in (r.get("component") or "").lower()]
+        if rows:
+            total = sum(r.get("percentage") or 0 for r in rows)
+            if abs(total - 100) > 0.5:
+                issues.append(
+                    f"{label.title()} milestones sum to {total}% (expected 100) — "
+                    f"rows: {[r.get('percentage') for r in rows]} — likely truncation"
+                )
+
+    # 2. Advance headline % vs sum of installments mentioned in conditions
+    for ap in (pt.get("advance_payments") or []):
+        headline = ap.get("percentage")
+        parts = []
+        for cond in (ap.get("conditions") or []):
+            cond_str = str(cond)
+            cond_str = _re3.sub(r'(?i)\bbg\s*(?:of)?\s*\d+(?:\.\d+)?\s*%', '', cond_str)
+            cond_str = _re3.sub(r'(?i)\d+(?:\.\d+)?\s*%\s*(?:of\s*)?(?:bg|bank guarantee)', '', cond_str)
+            parts += [float(m) for m in _re3.findall(r'\b(\d+(?:\.\d+)?)\s*%', cond_str)]
+        if headline and parts:
+            inst_sum = sum(parts)
+            if abs(inst_sum - headline) > 0.5:
+                issues.append(
+                    f"Advance {ap.get('component','?')}: headline={headline}% but "
+                    f"installments sum to {inst_sum}% {parts}"
+                )
+
+    # 3. EMD cross-check: emd_percentage × estimated_cost ≈ emd_max_cap
+    sf       = tender.get("security_and_financials") or {}
+    emd      = sf.get("emd") or {}
+    ec       = (tender.get("tender_information") or {}).get("estimated_cost") or {}
+    emd_pct  = emd.get("percentage")
+    emd_cap  = emd.get("max_cap_inr")
+    ec_amt   = ec.get("amount")
+    ec_denom = (ec.get("denomination") or "").lower()
+    if emd_pct and emd_cap and ec_amt:
+        ec_lakhs = ec_amt if ec_denom in ("lakhs", "lakh", "") else ec_amt * 100
+        expected_inr = (emd_pct / 100) * ec_lakhs * 100000
+        
+        # If expected is less than the cap, then the cap is suspiciously high.
+        # If expected is greater than the cap, that is exactly how a cap works.
+        if expected_inr < emd_cap:
+            ratio = abs(expected_inr - emd_cap) / max(expected_inr, emd_cap, 1)
+            if ratio > 0.25:
+                issues.append(
+                    f"EMD: {emd_pct}% × {ec_amt} {ec_denom} = {expected_inr:,.0f} INR "
+                    f"which is much less than emd_max_cap={emd_cap} INR"
+                )
+
+    for issue in issues:
+        print(f"[correctness] ⚠  {issue}")
+    if not issues:
+        print("[correctness] All arithmetic checks passed.")
+    return synthesized
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SCHEMA COMPLETENESS
+# Every required top-level section must be present in the output.
+# Missing sections get a placeholder so the UI never sees a key-absent dict.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_REQUIRED_SECTIONS = [
+    "tender_information", "key_dates", "scope_of_work",
+    "eligibility_and_qualification", "security_and_financials",
+    "payment_terms", "price_variation", "contract_conditions",
+    "technical_bid_documents",
+]
+
+def ensure_schema_completeness(synthesized: dict) -> dict:
+    import copy
+    result = copy.deepcopy(synthesized)
+    for tender in result.get("tenders", []):
+        for section in _REQUIRED_SECTIONS:
+            if not tender.get(section):
+                tender[section] = {"_status": "not_extracted"}
+                print(f"[completeness] ⚠  Section '{section}' missing — added placeholder")
+    return result
+
+
+def _build_chat_messages(message, tender_id="", history=None):
+    """Build a multi-turn messages array for the AI, including prior conversation turns.
+
+    history: list of {"role": "user"|"assistant", "content": str} from the frontend.
+    Capped at the last 20 entries (10 exchanges) to stay within token limits.
+    System context is injected as a leading user/assistant exchange so it works
+    with SAP AI Core's bedrock proxy regardless of top-level `system` support.
+    """
+    context = f" The user is asking about tender ID '{tender_id}'." if tender_id else ""
+    system_line = (
+        f"You are an AI assistant for tender document management.{context} "
+        "Be concise and use prior conversation context to answer follow-up questions."
+    )
+    messages = [
+        {"role": "user",      "content": f"[System] {system_line}"},
+        {"role": "assistant", "content": "Understood. I'm ready to help."},
+    ]
+    for turn in (history or [])[-20:]:
+        role    = turn.get("role", "")
+        content = (turn.get("content") or "").strip()
+        if role in ("user", "assistant") and content:
+            messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": message})
+    return messages
+
+
+def generate_chat_response(token, API_URL, message, tender_id="", history=None):
     payload = {
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": _build_chat_messages(message, tender_id, history),
         "max_tokens": 512,
         "anthropic_version": "bedrock-2023-05-31"
     }
     return get_result(token, API_URL, payload, retries=1, timeout=55)
 
 
-def generate_chat_response_stream(token, API_URL, message, tender_id=""):
+def generate_chat_response_stream(token, API_URL, message, tender_id="", history=None):
     """Yields text chunks as they arrive from the AI Core streaming API."""
-    context = f" The user is asking about tender '{tender_id}'." if tender_id else ""
-    prompt = (
-        f"You are an AI assistant helping with tender document management.{context}\n\n"
-        f"User question: {message}\n\n"
-        "Provide a concise answer in under 150 words."
-    )
     payload = {
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": _build_chat_messages(message, tender_id, history),
         "max_tokens": 512,
         "anthropic_version": "bedrock-2023-05-31",
         "stream": True,

@@ -19,6 +19,7 @@ import os
 import json
 import uuid
 import shutil
+import hashlib
 import threading
 import time
 from io import BytesIO
@@ -35,6 +36,9 @@ from functions import (
     merge_chunk_facts,
     synthesize_final_json,
     synonym_based_validation,
+    targeted_retrieval,
+    validate_correctness,
+    ensure_schema_completeness,
     generate_chat_response,
     generate_chat_response_stream,
     _has_text,
@@ -57,6 +61,8 @@ CREDENTIALS = {
 
 UPLOAD_DIR = Path(__file__).parent / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
+CACHE_DIR = UPLOAD_DIR / "cache"
+CACHE_DIR.mkdir(exist_ok=True)
 
 # ── Token — proactive refresh with a lock ─────────────────────────────────────
 # SAP AI Core tokens typically expire after 60 min. We treat them as valid for
@@ -126,6 +132,29 @@ def process_file():
     if upload_size > MAX_UPLOAD_MB * 1024 * 1024:
         return jsonify({"error": f"File too large. Maximum {MAX_UPLOAD_MB} MB allowed."}), 400
 
+    # ── Cache check ───────────────────────────────────────────────────────────
+    # SHA-256 the raw bytes so the same PDF uploaded twice skips the AI pipeline.
+    # Results are stored under uploads/cache/<hash>.json after the first run.
+    #
+    # CACHE_REPLAY_DELAY_SECS lets you simulate slow processing in dev/demo mode.
+    # Default is 3 s — long enough for the frontend timeline animation to show a
+    # couple of steps, but short enough to avoid proxy socket-idle timeouts.
+    #
+    # ⚠️  NEVER set this above ~60 s in dev: the Vite proxy's socket idle timeout
+    # will fire and the client receives a 502 before the response arrives.
+    # For true no-delay (CI / automated tests), set CACHE_REPLAY_DELAY_SECS=0.
+    pdf_bytes = file.read()
+    file_hash = hashlib.sha256(pdf_bytes).hexdigest()
+    cache_file = CACHE_DIR / f"{file_hash}.json"
+    if cache_file.exists():
+        delay = int(os.getenv("CACHE_REPLAY_DELAY_SECS", "3"))
+        print(f"[cache] HIT  {file.filename} ({file_hash[:12]}…) — replaying in {delay}s")
+        if delay > 0:
+            time.sleep(delay)
+        return jsonify(json.loads(cache_file.read_text(encoding="utf-8")))
+    print(f"[cache] MISS {file.filename} ({file_hash[:12]}…) — running full pipeline")
+    file.seek(0)
+
     # 1 + 2. Save uploaded PDF with a unique prefix to prevent filename collisions
     # between concurrent uploads of identically-named files.
     safe_filename = f"{uuid.uuid4().hex[:8]}_{file.filename}"
@@ -133,8 +162,9 @@ def process_file():
     file.save(str(file_path))
     split_dir = file_path.parent / (file_path.stem + "_split")
 
-    # 3. Split — 50 pages for text PDFs, 20 for image PDFs (vision API page limit)
-    # overlap=5 means consecutive chunks share 5 pages, preventing boundary losses
+    # 3. Split — text PDFs: 30 pages/chunk, 2-page overlap so multi-row tables
+    #    (price variation, QR options, payment milestones) are not silently split
+    #    at chunk boundaries. Image PDFs: 15 pages/chunk, no overlap.
     is_text_pdf     = _has_text(str(file_path))
     pages_per_chunk = 30 if is_text_pdf else 15
     chunk_overlap   = 2  if is_text_pdf else 0
@@ -150,6 +180,10 @@ def process_file():
         merged_facts = merge_chunk_facts(chunk_texts)
         final_json   = synthesize_final_json(get_token(), API_URL, merged_facts)
         final_json   = synonym_based_validation(final_json, merged_facts)
+        # Pass 1.7 — file_path still exists here; grep for critical missing fields
+        final_json   = targeted_retrieval(get_token, API_URL, str(file_path), final_json)
+        final_json   = validate_correctness(final_json)
+        final_json   = ensure_schema_completeness(final_json)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:
@@ -178,7 +212,16 @@ def process_file():
             **tender_doc
         })
 
-    return jsonify({"tenders": output_tenders})
+    output = {"tenders": output_tenders}
+
+    # Persist result so the same PDF is instant next time
+    try:
+        cache_file.write_text(json.dumps(output, ensure_ascii=False), encoding="utf-8")
+        print(f"[cache] Saved result for {file_hash[:12]}… → {cache_file.name}")
+    except Exception as e:
+        print(f"[cache] WARNING: could not write cache: {e}")
+
+    return jsonify(output)
 
 
 # ── POST /generate_pdf ─────────────────────────────────────────────────────────
@@ -248,6 +291,9 @@ def stream_response():
     data      = request.get_json(force=True) or {}
     message   = (data.get("message")  or "").strip()
     tender_id = (data.get("tenderId") or "").strip()
+    history   = data.get("history") or []
+    if not isinstance(history, list):
+        history = []
 
     if not message:
         return jsonify({"error": "No message provided"}), 400
@@ -261,8 +307,16 @@ def stream_response():
 
     def generate():
         try:
-            for chunk in generate_chat_response_stream(token, API_URL, message, tender_id):
-                yield f"data: {json.dumps({'text': chunk})}\n\n"
+            # Attempt true streaming; SAP AI Core /invoke drops connection when
+            # stream=True is unsupported, so fall back to non-streaming on any error.
+            streamed = False
+            try:
+                for chunk in generate_chat_response_stream(token, API_URL, message, tender_id, history):
+                    yield f"data: {json.dumps({'text': chunk})}\n\n"
+                    streamed = True
+            except Exception:
+                reply = generate_chat_response(token, API_URL, message, tender_id, history)
+                yield f"data: {json.dumps({'text': reply})}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
         yield "data: [DONE]\n\n"

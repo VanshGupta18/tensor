@@ -48,6 +48,7 @@ TASK.txt
 # IDE / tooling
 .claude
 .cursor
+.vscode
 /graphify-out
 CLAUDE.md
 

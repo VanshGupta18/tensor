@@ -8,6 +8,7 @@
  */
 
 import api, { callAction } from './client.js';
+import { base64ToBlob } from '../utils/fileUtils.js';
 
 // ── Helpers to convert CAP OData shape ↔ React shape ─────────────────────────
 
@@ -59,15 +60,24 @@ function toReactShape(t) {
  * Map React form values back to CAP flat structure for PATCH.
  */
 function toCapShape(formValues, changedBy) {
-  return {
-    title:          formValues.title,
-    budget:         formValues.budget,
-    deadline:       formValues.deadline,
-    status:         formValues.status,
-    location:       formValues.location,
-    contractor:     formValues.contractor,
-    lastChangedBy:  changedBy,
+  const shape = {
+    title:         formValues.title,
+    budget:        formValues.budget,
+    deadline:      formValues.deadline,
+    status:        formValues.status,
+    location:      formValues.location,
+    contractor:    formValues.contractor,
+    lastChangedBy: changedBy,
   };
+  const aiKeys = [
+    'issuingAuthority', 'contractType', 'bidSystem', 'fundingAgency',
+    'tenderFee', 'budgetCategory', 'publicationDate', 'preBidMeeting',
+    'bidSubmissionDeadline', 'technicalOpening', 'financialOpening', 'workOrderIssuance',
+  ];
+  for (const k of aiKeys) {
+    if (formValues[k] !== undefined) shape[k] = formValues[k] || null;
+  }
+  return shape;
 }
 
 // ── API functions ─────────────────────────────────────────────────────────────
@@ -175,11 +185,7 @@ export async function downloadTender(tender) {
     const b64 = result?.value ?? result;
     if (!b64 || typeof b64 !== 'string') throw new Error('Empty or invalid PDF data returned');
 
-    // Decode base64 → Uint8Array → Blob
-    const binary = atob(b64);
-    const bytes  = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    const blob = new Blob([bytes], { type: 'application/pdf' });
+    const blob = base64ToBlob(b64, 'application/pdf');
 
     const url = URL.createObjectURL(blob);
     const a   = document.createElement('a');
@@ -216,4 +222,15 @@ export async function downloadTender(tender) {
     // Re-throw so the caller (UI) can show a warning that PDF failed
     throw new Error(`PDF generation failed — downloaded as JSON instead. (${err.message})`);
   }
+}
+
+/**
+ * Fetch PDF as a base64 string without triggering a download.
+ * Used by DetailsScreen to pre-fetch on mount for instant download.
+ */
+export async function fetchPDFBase64(tenderId) {
+  const result = await callAction('generatePDF', { tenderId });
+  const b64 = result?.value ?? result;
+  if (!b64 || typeof b64 !== 'string') throw new Error('Invalid PDF data returned');
+  return b64;
 }

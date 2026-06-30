@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import RemarksModal from './RemarksModal';
+import StatusBadge from './StatusBadge';
 
 export default function DashboardScreen({
   username,
@@ -27,22 +28,6 @@ export default function DashboardScreen({
     fontSize: '12px',
     border: '1px solid var(--border-color)',
     lineHeight: 1.4,
-  };
-
-  const statusBadgeStyle = (status) => {
-    const map = {
-      Draft: { background: '#fef9c3', color: '#92400e', border: '1px solid #fde68a' },
-      Reviewed: { background: '#dbeafe', color: '#1e40af', border: '1px solid #bfdbfe' },
-      Approved: { background: '#d1fae5', color: '#065f46', border: '1px solid #a7f3d0' },
-    };
-    return {
-      display: 'inline-block',
-      padding: '2px 10px',
-      borderRadius: '99px',
-      fontSize: '12px',
-      fontWeight: 600,
-      ...(map[status] || { background: '#f3f4f6', color: '#374151', border: '1px solid #e5e7eb' }),
-    };
   };
 
   return (
@@ -195,7 +180,7 @@ export default function DashboardScreen({
 
             {!loading && (
               <div style={{ overflowX: 'auto' }}>
-                <table className="data-table">
+                <table className="data-table" style={{ minWidth: '700px' }}>
                   <thead>
                     <tr>
                       <th>Tender No</th>
@@ -221,9 +206,7 @@ export default function DashboardScreen({
                         <td>v{t.version}</td>
                         <td>{t.title}</td>
                         <td>
-                          <span style={statusBadgeStyle(t.details?.status)}>
-                            {t.details?.status || '—'}
-                          </span>
+                          <StatusBadge status={t.details?.status} />
                         </td>
                         <td>{t.createdBy}</td>
                         <td>{t.lastReviewedBy}</td>

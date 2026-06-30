@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 
 export default function SubmitRemarksModal({ tenderNo, changedFields, onCancel, onSave }) {
-  const [remarks, setRemarks] = useState({});
+  const [remarks,      setRemarks]      = useState({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     for (let change of changedFields) {
       if (!remarks[change.field] || !remarks[change.field].trim()) {
@@ -11,7 +12,12 @@ export default function SubmitRemarksModal({ tenderNo, changedFields, onCancel, 
         return;
       }
     }
-    onSave(remarks);
+    setIsSubmitting(true);
+    try {
+      await onSave(remarks);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -77,8 +83,10 @@ export default function SubmitRemarksModal({ tenderNo, changedFields, onCancel, 
           </div>
 
           <div className="modal-footer">
-            <button type="button" onClick={onCancel} className="btn btn-secondary">Cancel</button>
-            <button type="submit" className="btn btn-primary">Confirm & Save</button>
+            <button type="button" onClick={onCancel} className="btn btn-secondary" disabled={isSubmitting}>Cancel</button>
+            <button type="submit" className="btn btn-primary" disabled={isSubmitting}>
+              {isSubmitting ? 'Saving…' : 'Confirm & Save'}
+            </button>
           </div>
         </form>
       </div>

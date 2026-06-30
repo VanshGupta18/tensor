@@ -82,13 +82,9 @@ function App() {
 
   // ── Save changes ────────────────────────────────────────────────────────────
   const onSaveChanges = async (tenderId, updatedFormValues, changedList, remarksObject) => {
-    try {
-      await handleSaveChanges(tenderId, updatedFormValues, changedList, remarksObject);
-      const updated = queryClient.getQueryData(['tenders'])?.find(t => t.id === tenderId);
-      if (updated) setSelectedTender(updated);
-    } catch (err) {
-      console.error('Save failed:', err);
-    }
+    await handleSaveChanges(tenderId, updatedFormValues, changedList, remarksObject);
+    const updated = queryClient.getQueryData(['tenders'])?.find(t => t.id === tenderId);
+    if (updated) setSelectedTender(updated);
   };
 
   const handlePrefetchDocuments = (tenderId) =>

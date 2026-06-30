@@ -24,7 +24,7 @@ import time
 from io import BytesIO
 from pathlib import Path
 
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, Response
 from flask_cors import CORS
 from dotenv import load_dotenv
 
@@ -32,9 +32,13 @@ from functions import (
     get_access_token,
     split_pdf,
     extract_facts_from_chunks,
+    merge_chunk_facts,
     synthesize_final_json,
+    synonym_based_validation,
     generate_chat_response,
+    generate_chat_response_stream,
     _has_text,
+    _upload_semaphore,
 )
 from pdf_generator import generate_tender_pdf
 
@@ -114,6 +118,14 @@ def process_file():
     if not file.filename:
         return jsonify({"error": "Empty filename"}), 400
 
+    # Guard against oversized uploads before touching the filesystem
+    MAX_UPLOAD_MB = 100
+    file.seek(0, 2)
+    upload_size = file.tell()
+    file.seek(0)
+    if upload_size > MAX_UPLOAD_MB * 1024 * 1024:
+        return jsonify({"error": f"File too large. Maximum {MAX_UPLOAD_MB} MB allowed."}), 400
+
     # 1 + 2. Save uploaded PDF with a unique prefix to prevent filename collisions
     # between concurrent uploads of identically-named files.
     safe_filename = f"{uuid.uuid4().hex[:8]}_{file.filename}"
@@ -122,13 +134,26 @@ def process_file():
     split_dir = file_path.parent / (file_path.stem + "_split")
 
     # 3. Split — 50 pages for text PDFs, 20 for image PDFs (vision API page limit)
-    pages_per_chunk = 20 if not _has_text(str(file_path)) else 50
-    file_path_list = split_pdf(str(file_path), pages_per_chunk)
+    # overlap=5 means consecutive chunks share 5 pages, preventing boundary losses
+    is_text_pdf     = _has_text(str(file_path))
+    pages_per_chunk = 50 if is_text_pdf else 20
+    chunk_overlap   = 5  if is_text_pdf else 0
+    file_path_list  = split_pdf(str(file_path), pages_per_chunk, overlap=chunk_overlap)
+
+    if not _upload_semaphore.acquire(timeout=10):
+        return jsonify({"error": "Server busy — too many uploads in progress. Please try again shortly."}), 503
 
     try:
-        raw_facts = extract_facts_from_chunks(get_token(), API_URL, file_path_list)
-        final_json = synthesize_final_json(get_token(), API_URL, raw_facts)
+        # Pass get_token as a callable so each chunk call fetches a fresh token,
+        # preventing 401 errors when extraction runs longer than the token lifetime.
+        chunk_texts  = extract_facts_from_chunks(get_token, API_URL, file_path_list)
+        merged_facts = merge_chunk_facts(chunk_texts)
+        final_json   = synthesize_final_json(get_token(), API_URL, merged_facts)
+        final_json   = synonym_based_validation(final_json, merged_facts)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
     finally:
+        _upload_semaphore.release()
         # Clean up the original upload and all split chunks regardless of outcome
         try:
             file_path.unlink(missing_ok=True)
@@ -203,6 +228,8 @@ def response():
 
     if not message:
         return jsonify({"error": "No message provided"}), 400
+    if len(message) > 10_000:
+        return jsonify({"error": "Message too long. Maximum 10,000 characters."}), 400
 
     try:
         reply = generate_chat_response(get_token(), API_URL, message, tender_id)
@@ -212,9 +239,48 @@ def response():
     return jsonify({"reply": reply})
 
 
+# ── POST /stream-response ──────────────────────────────────────────────────────
+# Streaming variant of /response — emits SSE chunks as the model generates them.
+# Each chunk: `data: {"text": "..."}\n\n`   Final event: `data: [DONE]\n\n`
+# ──────────────────────────────────────────────────────────────────────────────
+@app.route("/stream-response", methods=["POST"])
+def stream_response():
+    data      = request.get_json(force=True) or {}
+    message   = (data.get("message")  or "").strip()
+    tender_id = (data.get("tenderId") or "").strip()
+
+    if not message:
+        return jsonify({"error": "No message provided"}), 400
+    if len(message) > 10_000:
+        return jsonify({"error": "Message too long. Maximum 10,000 characters."}), 400
+
+    try:
+        token = get_token()
+    except Exception as e:
+        return jsonify({"error": f"Auth token error: {e}"}), 503
+
+    def generate():
+        try:
+            for chunk in generate_chat_response_stream(token, API_URL, message, tender_id):
+                yield f"data: {json.dumps({'text': chunk})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return Response(
+        generate(),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
 # ── Entry point ────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     print(f"[AI Service] Starting on port {port}")
     print(f"[AI Service] Endpoints: POST /process_file  |  POST /response  |  GET /health")
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)

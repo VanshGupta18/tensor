@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { sendChatMessage, uploadFileForProcessing, applyTenderUpdate } from '../api/chatApi.js';
+import { streamChatMessage, uploadFileForProcessing, applyTenderUpdate } from '../api/chatApi.js';
+import { validatePdfFile } from '../utils/fileUtils.js';
 
 // ── Inline markdown renderer ──────────────────────────────────────────────────
 // Handles: **bold**, bullet lists (- / *), numbered lists, blank-line paragraphs.
@@ -349,6 +350,11 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
   }, [tenderId]);
 
   useEffect(() => {
+    document.body.style.overflow = isOpen ? 'hidden' : '';
+    return () => { document.body.style.overflow = ''; };
+  }, [isOpen]);
+
+  useEffect(() => {
     if (isOpen && mode === 'followup' && tenderId) {
       setMessages(prev => {
         // Prevent duplicate follow-up prompts for the same session/opening
@@ -400,7 +406,7 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
     setConfirmStates(prev => ({ ...prev, [msgId]: { ...(prev[msgId] || {}), [resultIdx]: 'rejected' } }));
   };
 
-  // ── Text chat ────────────────────────────────────────────────────────────────
+  // ── Text chat (streaming) ────────────────────────────────────────────────────
   const handleSendText = async () => {
     if (!inputText.trim()) return;
     const userQuery = inputText;
@@ -408,11 +414,45 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
     setInputText('');
     setIsProcessing(true);
     setProcessingType('chat');
+
+    const botMsgId = crypto.randomUUID();
+    let firstChunk = true;
+
     try {
-      const reply = await withTimeout(sendChatMessage(userQuery, tenderId), 65_000, 'Chat request');
-      addMessage(reply, 'bot');
+      await streamChatMessage(userQuery, tenderId, (chunk) => {
+        if (firstChunk) {
+          firstChunk = false;
+          // First token arrived — replace spinner with the streaming bubble
+          setIsProcessing(false);
+          setMessages(prev => [...prev, {
+            id: botMsgId,
+            sender: 'bot',
+            text: chunk,
+            type: 'text',
+            isStreaming: true,
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          }]);
+        } else {
+          setMessages(prev => prev.map(m =>
+            m.id === botMsgId ? { ...m, text: m.text + chunk } : m
+          ));
+        }
+      });
+      // Stream finished — remove cursor
+      setMessages(prev => prev.map(m =>
+        m.id === botMsgId ? { ...m, isStreaming: false } : m
+      ));
     } catch (err) {
-      addMessage(`⚠️ Could not reach AI service: ${err.message}`, 'bot');
+      setIsProcessing(false);
+      if (firstChunk) {
+        addMessage(`⚠️ Could not reach AI service: ${err.message}`, 'bot');
+      } else {
+        setMessages(prev => prev.map(m =>
+          m.id === botMsgId
+            ? { ...m, text: m.text + ` ⚠️ [interrupted]`, isStreaming: false }
+            : m
+        ));
+      }
     } finally {
       setIsProcessing(false);
       setProcessingType(null);
@@ -423,12 +463,20 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
+
+    const validationError = validatePdfFile(file);
+    if (validationError) {
+      addMessage(`⚠️ ${validationError}`, 'bot');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
     addMessage(`📎 Uploading **${file.name}** for AI extraction…`, 'user');
     setIsProcessing(true);
     setProcessingType('upload');
     try {
-      // 5 min timeout — processing a 600-page PDF takes ~150-190s on the server
-      const raw = await withTimeout(uploadFileForProcessing(file, tenderId), 300_000, 'File upload');
+      // 10 min timeout — matches server-side 600s limit for large PDFs
+      const raw = await withTimeout(uploadFileForProcessing(file, tenderId), 600_000, 'File upload');
       // raw is a JSON string from CAP action → parse it
       const result = typeof raw === 'string' ? JSON.parse(raw) : raw;
       addMessage({
@@ -487,7 +535,7 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
         </div>
       );
     }
-    return <MarkdownText text={msg.text} />;
+    return <MarkdownText text={msg.isStreaming ? msg.text + '▋' : msg.text} />;
   };
 
   return (

@@ -107,6 +107,7 @@ export function useTenders(username) {
         await submitAuditBatch(tenderId, changedList, remarksObject, username);
       } catch (auditErr) {
         console.error('Audit batch failed after successful save:', auditErr);
+        throw new Error('Changes were saved, but the audit log could not be recorded. Please contact support.');
       }
     }
   };

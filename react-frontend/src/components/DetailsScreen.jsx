@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import SubmitRemarksModal from './SubmitRemarksModal';
 import { useTenderDocuments } from '../hooks/useTender.js';
-import { updateAIResult } from '../api/tenderApi.js';
+import { updateAIResult, fetchPDFBase64 } from '../api/tenderApi.js';
+import { base64ToBlob } from '../utils/fileUtils.js';
 
 export default function DetailsScreen({
   tender,
@@ -24,6 +25,39 @@ export default function DetailsScreen({
   const [changedFields,    setChangedFields]    = useState([]);
   const [hasAiInSave,      setHasAiInSave]      = useState(false);
 
+  // PDF pre-fetch — triggered on mount so download is instant
+  const [pdfBase64,   setPdfBase64]   = useState(null);
+  const [pdfLoading,  setPdfLoading]  = useState(true);
+  const [pdfError,    setPdfError]    = useState(null);
+
+  useEffect(() => {
+    if (!tender?.id) return;
+    setPdfLoading(true);
+    setPdfError(null);
+    fetchPDFBase64(tender.id)
+      .then(b64 => { setPdfBase64(b64); setPdfError(null); })
+      .catch(err => { setPdfBase64(null); setPdfError(err.message || 'PDF unavailable'); })
+      .finally(() => setPdfLoading(false));
+  }, [tender?.id]);
+
+  const handleDownload = () => {
+    if (pdfError) { alert(`PDF not available: ${pdfError}`); return; }
+    if (!pdfBase64) { onDownload && onDownload(tender); return; }
+    try {
+      const blob = base64ToBlob(pdfBase64, 'application/pdf');
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
+      a.download = `tender_${tender.tenderNo || tender.id}_synopsis.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
   // AI extracted data
   const [aiData,          setAiData]          = useState(null);
   const [aiResultId,      setAiResultId]      = useState(null);
@@ -42,7 +76,14 @@ export default function DetailsScreen({
     setContractor(tender.details.contractor);
   }, [tender]);
 
-  // Hydrate local AI state
+  // Reset AI state when navigating to a different tender
+  useEffect(() => {
+    setAiEdits({});
+    setAiData(null);
+    setAiResultId(null);
+  }, [tender?.id]);
+
+  // Hydrate local AI state from documents (skip if user has in-progress edits)
   useEffect(() => {
     if (Object.keys(aiEdits).length > 0) return;
     const docWithAi = documents.find(d => d.aiResult);
@@ -129,16 +170,58 @@ export default function DetailsScreen({
         current = current[part];
       });
       let val = edits[path];
-      if (typeof current[last] === 'number' && !isNaN(Number(val))) val = Number(val);
-      if (typeof current[last] === 'boolean') val = val === 'true';
+      const currentVal = current[last];
+      if (currentVal != null && typeof currentVal === 'number' && val !== '' && !isNaN(Number(val))) {
+        val = Number(val);
+      } else if (currentVal != null && typeof currentVal === 'boolean') {
+        val = val === 'true';
+      }
       current[last] = val;
     });
     return newData;
   };
 
+  const fmtMoney = (obj) => {
+    if (!obj || !obj.amount) return '';
+    const amt = Number(obj.amount).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+    const den = obj.denomination && obj.denomination !== 'None' && obj.denomination !== 'null' ? ` ${obj.denomination}` : '';
+    return `${obj.currency || 'INR'} ${amt}${den}`;
+  };
+
+  const fmtDateTime = (v) => {
+    if (!v) return '';
+    if (typeof v === 'string') return v;
+    const parts = [];
+    if (v.date) parts.push(v.date);
+    if (v.time) parts.push(`${v.time} ${v.timezone || v.tz || 'IST'}`);
+    return parts.join('  ·  ');
+  };
+
   const handleSaveFinal = async (remarksObject) => {
+    // Compute flat Tenders columns from AI edits so they stay in sync with rawResponse
+    let flatAiFields = {};
+    if (hasAiInSave) {
+      const merged = applyEditsToData(aiData, aiEdits);
+      const ti = merged.tender_information || {};
+      const kd = merged.key_dates || {};
+      flatAiFields = {
+        issuingAuthority:      ti.issuing_authority  || '',
+        contractType:          ti.contract_type      || '',
+        bidSystem:             ti.bid_system         || '',
+        fundingAgency:         ti.funding_agency     || '',
+        tenderFee:             typeof ti.tender_fee === 'object' ? fmtMoney(ti.tender_fee) : (ti.tender_fee || ''),
+        budgetCategory:        ti.budget_category    || '',
+        publicationDate:       fmtDateTime(kd.publication),
+        preBidMeeting:         fmtDateTime(kd.pre_bid_meeting),
+        bidSubmissionDeadline: fmtDateTime(kd.bid_submission_deadline),
+        technicalOpening:      fmtDateTime(kd.technical_opening),
+        financialOpening:      fmtDateTime(kd.financial_opening),
+        workOrderIssuance:     fmtDateTime(kd.work_order_issuance),
+      };
+    }
+
     try {
-      await onSaveChanges(tender.id, { title, budget, deadline, status, location, contractor }, changedFields, remarksObject);
+      await onSaveChanges(tender.id, { title, budget, deadline, status, location, contractor, ...flatAiFields }, changedFields, remarksObject);
     } catch (err) {
       alert('Save failed: ' + err.message);
       return;
@@ -248,7 +331,12 @@ export default function DetailsScreen({
   };
   const SECTION_ORDER = Object.keys(SECTION_LABELS);
   // Sections suppressed from the accordion (shown elsewhere or removed entirely)
-  const SKIP_SECTIONS = new Set(['tender_information', 'key_dates', 'confidence_score', 'summary', 'key_terms']);
+  const SKIP_SECTIONS = new Set([
+    'tender_information', 'key_dates',
+    'confidence_score', 'confidenceScore',
+    'summary',
+    'key_terms', 'keyTerms',
+  ]);
 
   const isMoney    = v => v && typeof v === 'object' && 'amount' in v && 'currency' in v;
   const isDateTime = v => v && typeof v === 'object' && 'date' in v && !('amount' in v) && !('criterion' in v);
@@ -483,9 +571,14 @@ export default function DetailsScreen({
             {!isEditing ? (
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                 <button onClick={() => setIsEditing(true)} className="btn btn-secondary">Edit</button>
-                {onDownload && (
-                  <button onClick={() => onDownload(tender)} className="btn btn-secondary">Download</button>
-                )}
+                <button
+                  onClick={handleDownload}
+                  disabled={pdfLoading}
+                  className="btn btn-secondary"
+                  title={pdfError ? `PDF error: ${pdfError}` : undefined}
+                >
+                  {pdfLoading ? 'Preparing PDF…' : pdfError ? 'Download ⚠️' : 'Download'}
+                </button>
               </div>
             ) : (
               <>
@@ -541,14 +634,8 @@ export default function DetailsScreen({
             </div>
           </div>
 
-          <div className="details-metadata">
-            <div><strong>Created:</strong> {tender.createdBy}</div>
-            <div><strong>Reviewed:</strong> {tender.lastReviewedBy}</div>
-            <div><strong>Modified:</strong> {tender.lastChangedBy}</div>
-          </div>
-
-          {/* AI-extracted fields — read from DB (tender.details), same grid as above */}
-          {!isEditing && (() => {
+          {/* AI-extracted fields — shown in both view and edit modes */}
+          {(() => {
             const d = tender.details;
             const sectionLabel = (text) => (
               <p style={{ margin: '0 0 14px', fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{text}</p>
@@ -579,104 +666,102 @@ export default function DetailsScreen({
               frozenField('Work Order Issuance',     d.workOrderIssuance),
             ].filter(Boolean);
             const contacts = aiData?.tender_information?.contacts || [];
-            if (tiFields.length === 0 && kdFields.length === 0 && contacts.length === 0) return null;
+            const hasTI = isEditing ? !!aiData?.tender_information : tiFields.length > 0;
+            const hasKD = isEditing ? !!aiData?.key_dates         : kdFields.length > 0;
+            const hasContacts = contacts.length > 0;
+            if (!hasTI && !hasKD && !hasContacts) return null;
             return (
               <>
-                {tiFields.length > 0 && (
+                {hasTI && (
                   <div style={{ borderTop: '1px solid var(--border-color)', padding: '20px 24px 0' }}>
                     {sectionLabel('Tender Information')}
-                    <div className="details-grid">{tiFields}</div>
+                    {isEditing
+                      ? <div style={{ paddingBottom: 16 }}>{renderObjectField(aiData.tender_information, 'tender_information', '', 0)}</div>
+                      : <div className="details-grid">{tiFields}</div>
+                    }
                   </div>
                 )}
-                {kdFields.length > 0 && (
+                {hasKD && (
                   <div style={{ borderTop: '1px solid var(--border-color)', padding: '20px 24px 0' }}>
                     {sectionLabel('Key Dates')}
-                    <div className="details-grid">{kdFields}</div>
+                    {isEditing
+                      ? <div style={{ paddingBottom: 16 }}>{renderObjectField(aiData.key_dates, 'key_dates', '', 0)}</div>
+                      : <div className="details-grid">{kdFields}</div>
+                    }
                   </div>
                 )}
-                {contacts.length > 0 && (
+                {hasContacts && (
                   <div style={{ borderTop: '1px solid var(--border-color)', padding: '20px 24px' }}>
                     {sectionLabel('Contacts')}
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-                      {contacts.map((c, i) => (
-                        <div key={i} style={{ border: '1px solid var(--border-color)', borderRadius: 8, padding: '10px 14px', background: 'var(--bg-hover,#f9fafb)', minWidth: 160 }}>
-                          {c.name  && <div style={{ fontWeight: 600, fontSize: '13px', marginBottom: 2 }}>{c.name}</div>}
-                          {c.role  && <div style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{c.role}</div>}
-                          {c.email && <div style={{ color: 'var(--primary)', fontSize: '11px', marginTop: 3 }}>{c.email}</div>}
+                    {isEditing
+                      ? <div style={{ paddingBottom: 8 }}>{renderObjectField(contacts, 'tender_information.contacts', '', 0)}</div>
+                      : (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                          {contacts.map((c, i) => (
+                            <div key={i} style={{ border: '1px solid var(--border-color)', borderRadius: 8, padding: '10px 14px', background: 'var(--bg-hover,#f9fafb)', minWidth: 160 }}>
+                              {c.name  && <div style={{ fontWeight: 600, fontSize: '13px', marginBottom: 2 }}>{c.name}</div>}
+                              {c.role  && <div style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{c.role}</div>}
+                              {c.email && <div style={{ color: 'var(--primary)', fontSize: '11px', marginTop: 3 }}>{c.email}</div>}
+                            </div>
+                          ))}
                         </div>
-                      ))}
-                    </div>
+                      )
+                    }
                   </div>
                 )}
               </>
             );
           })()}
-        </div>
 
-        {/* ── Tender Data ──────────────────────────────────────────────────── */}
-        <div className="panel" style={{ marginTop: '24px' }}>
-          <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--border-color)' }}>
-            <h3 style={{ margin: 0 }}>Tender Data</h3>
-            <p style={{ margin: '4px 0 0', fontSize: '13px', color: 'var(--text-muted)' }}>
-              Structured data extracted from uploaded PDF documents.
-            </p>
-          </div>
-
+          {/* ── AI accordion — runs inside the same panel ────────────────────── */}
           {aiLoading && (
-            <div style={{ padding: '16px 24px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {[180, 140, 160, 120, 150].map((w, i) => (
+            <div style={{ borderTop: '1px solid var(--border-color)', padding: '16px 24px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {[1, 2, 3, 4, 5].map((_, i) => (
                 <div key={i} style={{
-                  height: '44px', borderRadius: '8px',
+                  height: '48px', borderRadius: '6px',
                   background: 'linear-gradient(90deg, var(--bg-hover) 25%, #e9eaec 50%, var(--bg-hover) 75%)',
                   backgroundSize: '400% 100%',
                   animation: 'shimmer 1.4s ease infinite',
                   animationDelay: `${i * 0.08}s`,
-                  maxWidth: `${w * 4}px`,
-                  width: '100%',
                 }} />
               ))}
             </div>
           )}
 
-          {!aiLoading && (!aiData || Object.keys(aiData).length === 0) && (
-            <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)' }}>
-              No AI processed documents found for this tender. Upload a PDF via the Chatbot to extract data.
-            </div>
-          )}
-
-          {!aiLoading && aiData && Object.keys(aiData).length > 0 && (
-            <div style={{ padding: '16px 24px' }}>
-              {[...Object.entries(aiData)]
-                .filter(([sectionKey]) => !SKIP_SECTIONS.has(sectionKey))
-                .sort(([a], [b]) => {
-                  const ai = SECTION_ORDER.indexOf(a), bi = SECTION_ORDER.indexOf(b);
-                  if (ai === -1 && bi === -1) return 0;
-                  if (ai === -1) return 1;
-                  if (bi === -1) return -1;
-                  return ai - bi;
-                })
-                .map(([sectionKey, sectionValue], idx) => {
+          {!aiLoading && aiData && (() => {
+            const sections = [...Object.entries(aiData)]
+              .filter(([k]) => !SKIP_SECTIONS.has(k))
+              .sort(([a], [b]) => {
+                const ai = SECTION_ORDER.indexOf(a), bi = SECTION_ORDER.indexOf(b);
+                if (ai === -1 && bi === -1) return 0;
+                if (ai === -1) return 1; if (bi === -1) return -1;
+                return ai - bi;
+              });
+            if (sections.length === 0) return null;
+            return (
+              <div style={{ borderTop: '1px solid var(--border-color)' }}>
+                {sections.map(([sectionKey, sectionValue], idx) => {
                   const isOpen = expandedSection === idx;
                   const label = SECTION_LABELS[sectionKey] || sectionKey.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
                   return (
-                    <div key={idx} style={{ marginBottom: '8px', border: '1px solid var(--border-color)', borderRadius: '8px', overflow: 'hidden' }}>
+                    <div key={idx} style={{ borderTop: idx > 0 ? '1px solid var(--border-color)' : 'none' }}>
                       <button
                         onClick={() => setExpandedSection(isOpen ? null : idx)}
                         style={{
-                          width: '100%', textAlign: 'left', padding: '12px 16px',
-                          background: isOpen ? 'var(--surface-hover,#f9fafb)' : 'transparent',
+                          width: '100%', textAlign: 'left', padding: '14px 24px',
+                          background: isOpen ? 'var(--bg-hover,#f9fafb)' : 'transparent',
                           border: 'none', cursor: 'pointer', display: 'flex',
                           justifyContent: 'space-between', alignItems: 'center',
                           fontWeight: 600, fontSize: '14px',
                         }}
                       >
                         <span>{label}</span>
-                        <span style={{ color: 'var(--text-muted)' }}>{isOpen ? '▲' : '▼'}</span>
+                        <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{isOpen ? '▲' : '▼'}</span>
                       </button>
                       {isOpen && (
-                        <div style={{ background: 'var(--surface,#fff)' }}>
+                        <div style={{ borderTop: '1px solid var(--border-color)', background: 'var(--bg-hover,#f9fafb)' }}>
                           {isEditing
-                            ? <div style={{ padding: '12px 16px' }}>{renderObjectField(sectionValue, sectionKey, '', 0)}</div>
+                            ? <div style={{ padding: '12px 24px' }}>{renderObjectField(sectionValue, sectionKey, '', 0)}</div>
                             : renderSmartSection(sectionKey, sectionValue)
                           }
                         </div>
@@ -684,8 +769,15 @@ export default function DetailsScreen({
                     </div>
                   );
                 })}
-            </div>
-          )}
+              </div>
+            );
+          })()}
+
+          <div className="details-metadata" style={{ borderTop: '1px solid var(--border-color)' }}>
+            <div><strong>Created:</strong> {tender.createdBy}</div>
+            <div><strong>Reviewed:</strong> {tender.lastReviewedBy}</div>
+            <div><strong>Modified:</strong> {tender.lastChangedBy}</div>
+          </div>
         </div>
       </main>
 

@@ -12,13 +12,14 @@ const UPLOAD_STAGES = [
   { label: 'Saving to database', detail: 'Persisting extracted tender data', delay: 24000 },
 ];
 
-function UploadTimeline({ filename }) {
+function UploadTimeline({ filename, isComplete }) {
   const [step, setStep] = useState(0);
   const [timestamps, setTimestamps] = useState([]);
+  const timersRef = useRef([]);
 
   useEffect(() => {
     setTimestamps([new Date()]);
-    const timers = UPLOAD_STAGES.slice(1).map((s, i) =>
+    timersRef.current = UPLOAD_STAGES.slice(1).map((s, i) =>
       setTimeout(() => {
         setStep(i + 1);
         setTimestamps(prev => {
@@ -28,8 +29,15 @@ function UploadTimeline({ filename }) {
         });
       }, s.delay)
     );
-    return () => timers.forEach(clearTimeout);
+    return () => timersRef.current.forEach(clearTimeout);
   }, []);
+
+  useEffect(() => {
+    if (isComplete) {
+      timersRef.current.forEach(clearTimeout);
+      setStep(UPLOAD_STAGES.length);
+    }
+  }, [isComplete]);
 
   return (
     <div style={{ fontSize: '13px', minWidth: '220px' }}>
@@ -230,6 +238,7 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
   const [inputText, setInputText] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingType, setProcessingType] = useState(null); // 'chat' | 'upload'
+  const [isUploadComplete, setIsUploadComplete] = useState(false);
   const [uploadFilename, setUploadFilename] = useState('');
   const [confirmStates, setConfirmStates] = useState({});
 
@@ -330,6 +339,7 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
     addMessage(`Uploading **${file.name}**…`, 'user');
     setUploadFilename(file.name);
     setIsProcessing(true);
+    setIsUploadComplete(false);
     setProcessingType('upload');
 
     try {
@@ -340,6 +350,11 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
           .catch(r => { clearTimeout(timeout); reject(r); });
       });
       const result = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      
+      // Zip the timeline to 100% and let user see it complete
+      setIsUploadComplete(true);
+      await new Promise(r => setTimeout(r, 600));
+
       const msgId = crypto.randomUUID();
       setMessages(prev => [...prev, {
         id: msgId, sender: 'bot', type: 'file-result',
@@ -429,7 +444,7 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
           {isProcessing && (
             <div className="chat-msg bot">
               {processingType === 'upload' ? (
-                <UploadTimeline filename={uploadFilename} />
+                <UploadTimeline filename={uploadFilename} isComplete={isUploadComplete} />
               ) : (
                 <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
                   {[0, 0.2, 0.4].map((delay, i) => (

@@ -5,6 +5,6 @@
   "scripts": {
     "backend": "npm run watch --prefix cap-backend",
     "frontend": "npm run dev --prefix react-frontend",
-    "ai": "cd python-ai-service && .venv\\Scripts\\python.exe app.py"
+    "ai": "cd python-ai-service && .venv/bin/python app.py"
   }
 }

@@ -244,8 +244,9 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
   useEffect(() => { setMessages([]); }, [tenderId]);
 
   useEffect(() => {
-    document.body.style.overflow = isOpen ? 'hidden' : '';
-    return () => { document.body.style.overflow = ''; };
+    // Disabled so user can scroll tender details
+    // document.body.style.overflow = isOpen ? 'hidden' : '';
+    // return () => { document.body.style.overflow = ''; };
   }, [isOpen]);
 
   const addMessage = (payload, sender) => {

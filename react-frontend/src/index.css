@@ -108,6 +108,10 @@ p { color: var(--slate); }
   }
 }
 
+.app-shell.sidebar-collapsed .main-area {
+  margin-left: 68px;
+}
+
 /* ==========================================================================
    SIDEBAR
    ========================================================================== */
@@ -119,17 +123,53 @@ p { color: var(--slate); }
   display: flex;
   flex-direction: column;
   z-index: 20;
-  overflow: hidden;
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.sidebar.collapsed {
+  width: 68px;
 }
 
 .sb-brand {
   height: 60px;
-  padding: 0 18px;
+  padding: 0 17px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  flex-shrink: 0;
+  position: relative;
+}
+
+.sb-brand-content {
   display: flex;
   align-items: center;
   gap: 10px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  flex-shrink: 0;
+  min-width: max-content;
+}
+
+.sb-toggle {
+  position: absolute;
+  right: -14px;
+  top: 16px;
+  width: 28px;
+  height: 28px;
+  background: var(--copper);
+  color: #fff;
+  border: 2px solid var(--page);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: all 0.2s;
+  padding: 0;
+  z-index: 30;
+  box-shadow: var(--shadow-sm);
+}
+.sb-toggle:hover {
+  background: var(--copper-lt);
+  transform: scale(1.1);
 }
 
 .sb-mark {
@@ -142,7 +182,8 @@ p { color: var(--slate); }
   flex-shrink: 0;
 }
 
-.sb-wordmark { line-height: 1.2; }
+.sb-wordmark { line-height: 1.2; opacity: 1; transition: opacity 0.2s; white-space: nowrap; }
+.sidebar.collapsed .sb-wordmark { opacity: 0; pointer-events: none; width: 0; overflow: hidden; }
 .sb-name     { font-size: 14.5px; font-weight: 700; color: #fff; letter-spacing: -0.025em; }
 .sb-sub      { font-size: 9.5px; color: rgba(255, 255, 255, 0.28); letter-spacing: 0.09em; text-transform: uppercase; margin-top: 2px; }
 
@@ -153,6 +194,7 @@ p { color: var(--slate); }
   flex-direction: column;
   gap: 1px;
   overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .sb-section {
@@ -161,6 +203,10 @@ p { color: var(--slate); }
   color: rgba(255, 255, 255, 0.2);
   padding: 12px 10px 5px;
   pointer-events: none;
+  white-space: nowrap;
+}
+.sidebar.collapsed .sb-section-text {
+  opacity: 0;
 }
 .sb-section:first-child { padding-top: 4px; }
 
@@ -177,35 +223,32 @@ p { color: var(--slate); }
   border: none; background: none;
   font-family: var(--font-family);
   width: 100%; text-align: left;
+  white-space: nowrap;
 }
 
-.sb-item:hover  { color: rgba(255, 255, 255, 0.82); background: rgba(255, 255, 255, 0.04); }
-.sb-item.active { color: #fff; background: rgba(255, 255, 255, 0.07); }
-
-.sb-item.active::before {
-  content: '';
-  position: absolute; left: 0; top: 7px; bottom: 7px;
-  width: 2.5px; background: var(--copper);
-  border-radius: 0 2px 2px 0;
+.sidebar.collapsed .sb-text {
+  opacity: 0;
+  pointer-events: none;
+  width: 0;
+}
+.sidebar.collapsed .sb-item {
+  justify-content: center;
+  padding: 8px 0;
+}
+.sidebar.collapsed .sb-count {
+  display: none;
 }
 
-.sb-item svg         { flex-shrink: 0; opacity: 0.55; }
-.sb-item.active svg  { opacity: 1; }
-
-.sb-count {
-  margin-left: auto;
-  font-size: 9.5px; font-weight: 600;
-  background: rgba(184, 115, 51, 0.2);
-  color: var(--copper-lt);
-  padding: 1px 6px; border-radius: 99px;
-  font-variant-numeric: tabular-nums;
-}
 
 .sb-foot {
   padding: 12px 14px;
   border-top: 1px solid rgba(255, 255, 255, 0.06);
   display: flex; align-items: center; gap: 9px;
   flex-shrink: 0;
+}
+.sidebar.collapsed .sb-foot {
+  padding: 12px 0;
+  justify-content: center;
 }
 
 .sb-ava {
@@ -217,7 +260,8 @@ p { color: var(--slate); }
   flex-shrink: 0;
 }
 
-.sb-user  { flex: 1; overflow: hidden; }
+.sb-user  { flex: 1; overflow: hidden; transition: opacity 0.2s; }
+.sidebar.collapsed .sb-user, .sidebar.collapsed .sb-out { display: none; }
 .sb-uname { font-size: 12px; color: rgba(255, 255, 255, 0.78); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sb-urole { font-size: 10px; color: rgba(255, 255, 255, 0.28); }
 

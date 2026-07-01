@@ -54,6 +54,8 @@ function App() {
   // Chatbot state — tracks which tender the chatbot is opened for (null = global)
   const [isChatOpen,   setIsChatOpen]   = useState(false);
   const [chatTenderId, setChatTenderId] = useState(null);
+  
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
   const queryClient = useQueryClient();
 
@@ -107,6 +109,7 @@ function App() {
   const handleOpenChat = (tender) => {
     setChatTenderId(tender?.id || null);
     setIsChatOpen(true);
+    setIsSidebarCollapsed(true);
   };
 
   // ── Save changes ────────────────────────────────────────────────────────────
@@ -151,11 +154,13 @@ function App() {
       )}
 
       {screen !== 'login' && (
-        <div className={`app-shell ${isChatOpen ? 'chat-open' : ''}`}>
+        <div className={`app-shell ${isChatOpen ? 'chat-open' : ''} ${isSidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
           <Sidebar
             username={user}
             tenderCount={tenders.length}
             currentScreen={screen}
+            isCollapsed={isSidebarCollapsed}
+            onToggle={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
             onLogout={handleLogout}
             onNavigate={(s) => setScreen(s)}
           />

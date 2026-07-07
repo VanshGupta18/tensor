@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "dependencies": {
     "@cap-js/hana": "^2",
+    "@cap-js/postgres": "^2",
     "@sap/cds": "^9",
     "@sap/xssec": "^4",
     "axios": "^1.18.0",
@@ -14,7 +15,6 @@
     "passport": "^0.7.0"
   },
   "devDependencies": {
-    "@cap-js/sqlite": "^2.4",
     "@sap/cds-dk": "^9"
   },
   "scripts": {
@@ -54,7 +54,7 @@
       },
       "[development]": {
         "db": {
-          "kind": "sqlite"
+          "kind": "postgres"
         },
         "auth": {
           "kind": "mocked",
@@ -79,9 +79,13 @@
     "[development]": {
       "requires": {
         "db": {
-          "kind": "sqlite",
+          "kind": "postgres",
           "credentials": {
-            "url": "db.sqlite"
+            "host": "localhost",
+            "port": 5433,
+            "database": "tenderflow",
+            "user": "tenderflow",
+            "password": "tenderflow"
           }
         }
       }

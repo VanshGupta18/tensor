@@ -2,8 +2,21 @@ import React, { useState, useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import SubmitRemarksModal from './SubmitRemarksModal';
 import { useTenderDocuments } from '../hooks/useTender.js';
-import { updateAIResult, fetchPDFBase64 } from '../api/tenderApi.js';
+import { updateAIResult } from '../api/tenderApi.js';
 import { base64ToBlob } from '../utils/fileUtils.js';
+import { fmtDateTime } from '../utils/formatters.js';
+import { getPathValue, applyEditsToData } from '../utils/dataUtils.js';
+import { SKIP_SECTIONS, SECTION_ORDER, SECTION_LABELS, renderObjectField, renderSmartSection } from './details/SmartRenderer.jsx';
+
+// tender_information is fully flattened onto Tenders now (see schema.cds) — contacts
+// is the one field stored as JSON text rather than its own column.
+const parseContacts = raw => {
+  if (!raw) return [];
+  try { const v = JSON.parse(raw); return Array.isArray(v) ? v : []; } catch { return []; }
+};
+
+const TABLE_TH = { padding: '7px 10px', fontSize: '12px', fontWeight: 600, background: 'var(--bg-hover,#f9fafb)', color: 'var(--text-muted)', textAlign: 'left', borderBottom: '1px solid var(--border-color,#e5e7eb)' };
+const TABLE_TD = { padding: '8px 10px', fontSize: '13px', verticalAlign: 'top', borderBottom: '1px solid var(--border-color,#e5e7eb)' };
 
 export default function DetailsScreen({
   tender,
@@ -21,40 +34,23 @@ export default function DetailsScreen({
   const [location,    setLocation]    = useState(tender.details.location);
   const [contractor,  setContractor]  = useState(tender.details.contractor);
 
+  // tender_information fields — plain editable state, same as the fields above,
+  // since this data now lives directly on Tenders rather than inside aiData/rawResponse.
+  const [issuingAuthority, setIssuingAuthority] = useState(tender.details.issuingAuthority || '');
+  const [contractType,     setContractType]     = useState(tender.details.contractType || '');
+  const [bidSystem,        setBidSystem]        = useState(tender.details.bidSystem || '');
+  const [fundingAgency,    setFundingAgency]    = useState(tender.details.fundingAgency || '');
+  const [tenderFee,        setTenderFee]        = useState(tender.details.tenderFee || '');
+  const [budgetCategory,   setBudgetCategory]   = useState(tender.details.budgetCategory || '');
+  const [contacts,         setContacts]         = useState(() => parseContacts(tender.details.contacts));
+
   const [showRemarksModal, setShowRemarksModal] = useState(false);
   const [changedFields,    setChangedFields]    = useState([]);
   const [hasAiInSave,      setHasAiInSave]      = useState(false);
 
-  // PDF pre-fetch — triggered on mount so download is instant
-  const [pdfBase64,   setPdfBase64]   = useState(null);
-  const [pdfLoading,  setPdfLoading]  = useState(true);
-  const [pdfError,    setPdfError]    = useState(null);
-
-  useEffect(() => {
-    if (!tender?.id) return;
-    setPdfLoading(true);
-    setPdfError(null);
-    fetchPDFBase64(tender.id)
-      .then(b64 => { setPdfBase64(b64); setPdfError(null); })
-      .catch(err => { setPdfBase64(null); setPdfError(err.message || 'PDF unavailable'); })
-      .finally(() => setPdfLoading(false));
-  }, [tender?.id]);
-
   const handleDownload = () => {
-    if (pdfError) { alert(`PDF not available: ${pdfError}`); return; }
-    if (!pdfBase64) { onDownload && onDownload(tender); return; }
-    try {
-      const blob = base64ToBlob(pdfBase64, 'application/pdf');
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement('a');
-      a.href     = url;
-      a.download = `tender_${tender.tenderNo || tender.id}_synopsis.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      alert(err.message);
+    if (onDownload) {
+      onDownload(tender);
     }
   };
 
@@ -62,7 +58,6 @@ export default function DetailsScreen({
   const [aiData,          setAiData]          = useState(null);
   const [aiResultId,      setAiResultId]      = useState(null);
   const [aiEdits,         setAiEdits]         = useState({});   // path → new content
-  const [expandedSection, setExpandedSection] = useState(null);
 
   const queryClient = useQueryClient();
   const { data: documents = [], isLoading: aiLoading } = useTenderDocuments(tender.id);
@@ -74,6 +69,13 @@ export default function DetailsScreen({
     setStatus(tender.details.status);
     setLocation(tender.details.location);
     setContractor(tender.details.contractor);
+    setIssuingAuthority(tender.details.issuingAuthority || '');
+    setContractType(tender.details.contractType || '');
+    setBidSystem(tender.details.bidSystem || '');
+    setFundingAgency(tender.details.fundingAgency || '');
+    setTenderFee(tender.details.tenderFee || '');
+    setBudgetCategory(tender.details.budgetCategory || '');
+    setContacts(parseContacts(tender.details.contacts));
   }, [tender]);
 
   // Reset AI state when navigating to a different tender
@@ -90,23 +92,42 @@ export default function DetailsScreen({
     if (docWithAi?.aiResult?.rawResponse) {
       try {
         const parsed = JSON.parse(docWithAi.aiResult.rawResponse);
+        let data = null;
         if (parsed.tenders && parsed.tenders.length > 0) {
-          setAiData(parsed.tenders[0]);
-        } else if (parsed.sections) {
-          setAiData({ legacy_sections: parsed.sections });
+          data = parsed.tenders[0];
+        } else if (Array.isArray(parsed.sections)) {
+          data = { legacy_sections: parsed.sections };
+        } else if (parsed.sections && typeof parsed.sections === 'object') {
+          data = parsed.sections;
         } else {
-          setAiData(parsed);
+          data = parsed;
         }
+        setAiData(data);
         setAiResultId(docWithAi.aiResult.ID);
+
+        // Fallback: if DB-enriched fields are empty (tender processed before service.js fix),
+        // populate them from rawResponse's tender_overview section.
+        const ov = data?.tender_overview;
+        if (ov && typeof ov === 'object' && ov._status !== 'not_extracted') {
+          if (!issuingAuthority && ov.issuing_authority) setIssuingAuthority(ov.issuing_authority);
+          if (!contractType     && ov.contract_type)     setContractType(ov.contract_type);
+          if (!bidSystem        && ov.bid_system)        setBidSystem(ov.bid_system);
+          if (!fundingAgency    && ov.funding_agency)    setFundingAgency(ov.funding_agency);
+          if (!budgetCategory   && ov.budget_category)   setBudgetCategory(ov.budget_category);
+          if (!tenderFee && ov.tender_fee?.amount) {
+            const fee = ov.tender_fee;
+            setTenderFee(`${fee.amount} ${fee.currency || ''}`.trim());
+          }
+          if (contacts.length === 0 && Array.isArray(ov.contacts) && ov.contacts.length > 0) {
+            setContacts(ov.contacts);
+          }
+        }
       } catch {
         setAiData(null);
       }
     }
   }, [documents, aiEdits]);
 
-  const getPathValue = (obj, path) => {
-    return path.split('.').reduce((acc, part) => acc && acc[part], obj);
-  };
 
   const getChangesList = () => {
     const list = [];
@@ -116,6 +137,16 @@ export default function DetailsScreen({
     if (status    !== tender.details.status)    list.push({ field: 'Status',     oldVal: tender.details.status,    newVal: status });
     if (location  !== tender.details.location)  list.push({ field: 'Location',   oldVal: tender.details.location,  newVal: location });
     if (contractor!== tender.details.contractor)list.push({ field: 'Contractor', oldVal: tender.details.contractor,newVal: contractor });
+    const eq = (a, b) => (a || '') === (b || '');
+    if (!eq(issuingAuthority, tender.details.issuingAuthority)) list.push({ field: 'Issuing Authority', oldVal: tender.details.issuingAuthority, newVal: issuingAuthority });
+    if (!eq(contractType,     tender.details.contractType))     list.push({ field: 'Contract Type',     oldVal: tender.details.contractType,     newVal: contractType });
+    if (!eq(bidSystem,        tender.details.bidSystem))        list.push({ field: 'Bid System',        oldVal: tender.details.bidSystem,        newVal: bidSystem });
+    if (!eq(fundingAgency,    tender.details.fundingAgency))    list.push({ field: 'Funding Agency',    oldVal: tender.details.fundingAgency,    newVal: fundingAgency });
+    if (!eq(tenderFee,        tender.details.tenderFee))        list.push({ field: 'Tender Fee',        oldVal: tender.details.tenderFee,        newVal: tenderFee });
+    if (!eq(budgetCategory,   tender.details.budgetCategory))   list.push({ field: 'Budget Category',   oldVal: tender.details.budgetCategory,   newVal: budgetCategory });
+    if (JSON.stringify(contacts) !== JSON.stringify(parseContacts(tender.details.contacts))) {
+      list.push({ field: 'Contacts', oldVal: tender.details.contacts || '[]', newVal: JSON.stringify(contacts) });
+    }
     return list;
   };
 
@@ -141,6 +172,13 @@ export default function DetailsScreen({
     setStatus(tender.details.status);
     setLocation(tender.details.location);
     setContractor(tender.details.contractor);
+    setIssuingAuthority(tender.details.issuingAuthority || '');
+    setContractType(tender.details.contractType || '');
+    setBidSystem(tender.details.bidSystem || '');
+    setFundingAgency(tender.details.fundingAgency || '');
+    setTenderFee(tender.details.tenderFee || '');
+    setBudgetCategory(tender.details.budgetCategory || '');
+    setContacts(parseContacts(tender.details.contacts));
   };
 
   const handleSubmitClick = () => {
@@ -159,69 +197,14 @@ export default function DetailsScreen({
     setShowRemarksModal(true);
   };
 
-  const applyEditsToData = (data, edits) => {
-    const newData = JSON.parse(JSON.stringify(data));
-    Object.keys(edits).forEach(path => {
-      const parts = path.split('.');
-      const last = parts.pop();
-      let current = newData;
-      parts.forEach(part => {
-        if (current[part] === undefined) current[part] = {};
-        current = current[part];
-      });
-      let val = edits[path];
-      const currentVal = current[last];
-      if (currentVal != null && typeof currentVal === 'number' && val !== '' && !isNaN(Number(val))) {
-        val = Number(val);
-      } else if (currentVal != null && typeof currentVal === 'boolean') {
-        val = val === 'true';
-      }
-      current[last] = val;
-    });
-    return newData;
-  };
-
-  const fmtMoney = (obj) => {
-    if (!obj || !obj.amount) return '';
-    const amt = Number(obj.amount).toLocaleString('en-IN', { maximumFractionDigits: 2 });
-    const den = obj.denomination && obj.denomination !== 'None' && obj.denomination !== 'null' ? ` ${obj.denomination}` : '';
-    return `${obj.currency || 'INR'} ${amt}${den}`;
-  };
-
-  const fmtDateTime = (v) => {
-    if (!v) return '';
-    if (typeof v === 'string') return v;
-    const parts = [];
-    if (v.date) parts.push(v.date);
-    if (v.time) parts.push(`${v.time} ${v.timezone || v.tz || 'IST'}`);
-    return parts.join('  ·  ');
-  };
 
   const handleSaveFinal = async (remarksObject) => {
-    // Compute flat Tenders columns from AI edits so they stay in sync with rawResponse
-    let flatAiFields = {};
-    if (hasAiInSave) {
-      const merged = applyEditsToData(aiData, aiEdits);
-      const ti = merged.tender_information || {};
-      const kd = merged.key_dates || {};
-      flatAiFields = {
-        issuingAuthority:      ti.issuing_authority  || '',
-        contractType:          ti.contract_type      || '',
-        bidSystem:             ti.bid_system         || '',
-        fundingAgency:         ti.funding_agency     || '',
-        tenderFee:             typeof ti.tender_fee === 'object' ? fmtMoney(ti.tender_fee) : (ti.tender_fee || ''),
-        budgetCategory:        ti.budget_category    || '',
-        publicationDate:       fmtDateTime(kd.publication),
-        preBidMeeting:         fmtDateTime(kd.pre_bid_meeting),
-        bidSubmissionDeadline: fmtDateTime(kd.bid_submission_deadline),
-        technicalOpening:      fmtDateTime(kd.technical_opening),
-        financialOpening:      fmtDateTime(kd.financial_opening),
-        workOrderIssuance:     fmtDateTime(kd.work_order_issuance),
-      };
-    }
-
     try {
-      await onSaveChanges(tender.id, { title, budget, deadline, status, location, contractor, ...flatAiFields }, changedFields, remarksObject);
+      await onSaveChanges(tender.id, {
+        title, budget, deadline, status, location, contractor,
+        issuingAuthority, contractType, bidSystem, fundingAgency, tenderFee, budgetCategory,
+        contacts: JSON.stringify(contacts),
+      }, changedFields, remarksObject);
     } catch (err) {
       alert('Save failed: ' + err.message);
       return;
@@ -230,20 +213,9 @@ export default function DetailsScreen({
     if (hasAiInSave && aiResultId) {
       try {
         const updatedData = applyEditsToData(aiData, aiEdits);
-        
-        const docWithAi = documents.find(d => d.aiResult);
-        let payloadToSave = updatedData;
-        if (docWithAi?.aiResult?.rawResponse) {
-            const parsed = JSON.parse(docWithAi.aiResult.rawResponse);
-            if (parsed.tenders && parsed.tenders.length > 0) {
-                parsed.tenders[0] = updatedData;
-                payloadToSave = parsed;
-            } else if (parsed.sections) {
-                payloadToSave = { sections: updatedData.legacy_sections };
-            }
-        }
-        
-        await updateAIResult(aiResultId, payloadToSave);
+        // Always persist the flat tenderDoc shape (matching what the AI pipeline
+        // originally stores) — no re-wrapping. See updateAIResult() for why.
+        await updateAIResult(aiResultId, updatedData);
         setAiData(updatedData);
         setAiEdits({});
         queryClient.invalidateQueries({ queryKey: ['tender', tender.id, 'documents'] });
@@ -255,305 +227,6 @@ export default function DetailsScreen({
     setShowRemarksModal(false);
     setIsEditing(false);
   };
-
-  const renderObjectField = (value, path, keyName, depth = 0) => {
-    if (value === null || value === undefined) return null;
-
-    if (Array.isArray(value)) {
-      return (
-        <div key={path} style={{ marginBottom: '12px', paddingLeft: depth === 0 ? 0 : 16 }}>
-          {keyName && (
-             <div style={{ fontWeight: 600, color: 'var(--text-muted)', fontSize: '12px', textTransform: 'uppercase', marginBottom: '4px' }}>
-               {String(keyName).replace(/_/g, ' ')}
-             </div>
-          )}
-          {value.length === 0 && <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Empty list</div>}
-          {value.map((item, i) => (
-             <div key={i} style={{ borderLeft: '2px solid var(--border-color)', paddingLeft: '12px', marginBottom: '8px' }}>
-                {renderObjectField(item, `${path}.${i}`, `Item ${i+1}`, depth + 1)}
-             </div>
-          ))}
-        </div>
-      );
-    }
-
-    if (typeof value === 'object') {
-      return (
-        <div key={path} style={{ marginBottom: '12px', paddingLeft: depth === 0 ? 0 : 16 }}>
-          {keyName && (
-            <div style={{ fontWeight: 600, color: 'var(--text-muted)', fontSize: '12px', textTransform: 'uppercase', marginBottom: '4px' }}>
-              {String(keyName).replace(/_/g, ' ')}
-            </div>
-          )}
-          {Object.entries(value).map(([k, v]) => renderObjectField(v, `${path}.${k}`, k, depth + 1))}
-        </div>
-      );
-    }
-
-    // Primitive
-    return (
-      <div key={path} style={{ display: 'flex', gap: '12px', padding: '6px 0', borderBottom: '1px solid var(--border-color)', alignItems: 'flex-start', paddingLeft: depth === 0 ? 0 : 16 }}>
-        <div style={{ minWidth: '180px', color: 'var(--text-muted)', fontSize: '13px', fontWeight: 500, paddingTop: isEditing ? '8px' : 0 }}>
-          {String(keyName).replace(/_/g, ' ')}
-        </div>
-        <div style={{ flex: 1, fontSize: '13px', wordBreak: 'break-word' }}>
-          {isEditing ? (
-            <textarea
-              value={aiEdits[path] !== undefined ? aiEdits[path] : String(value)}
-              onChange={e => setAiEdits(prev => ({ ...prev, [path]: e.target.value }))}
-              style={{
-                width: '100%', minHeight: '40px', padding: '6px 8px',
-                border: '1px solid var(--border-color)', borderRadius: '6px',
-                fontSize: '13px', fontFamily: 'inherit', resize: 'vertical',
-                boxSizing: 'border-box', background: 'var(--bg-page)',
-              }}
-            />
-          ) : (
-             aiEdits[path] !== undefined ? String(aiEdits[path]) : String(value)
-          )}
-        </div>
-      </div>
-    );
-  };
-
-  // ── Smart view helpers (view-mode only) ────────────────────────────────────
-  const SECTION_LABELS = {
-    tender_information:          'Tender Information',
-    key_dates:                   'Key Dates',
-    scope_of_work:               'Scope of Work',
-    eligibility_and_qualification: 'Eligibility & Qualification',
-    security_and_financials:     'Security & Financials',
-    payment_terms:               'Payment Terms',
-    price_variation:             'Price Variation',
-    contract_conditions:         'Contract Conditions',
-    technical_bid_documents:     'Technical Bid Documents',
-    legacy_sections:             'Extracted Data',
-  };
-  const SECTION_ORDER = Object.keys(SECTION_LABELS);
-  // Sections suppressed from the accordion (shown elsewhere or removed entirely)
-  const SKIP_SECTIONS = new Set([
-    'tender_information', 'key_dates',
-    'confidence_score', 'confidenceScore',
-    'summary',
-    'key_terms', 'keyTerms',
-  ]);
-
-  const isMoney    = v => v && typeof v === 'object' && 'amount' in v && 'currency' in v;
-  const isDateTime = v => v && typeof v === 'object' && 'date' in v && !('amount' in v) && !('criterion' in v);
-  const isDuration = v => v && typeof v === 'object' && 'duration' in v && 'unit' in v && Object.keys(v).length === 2;
-  const isLiqDmg   = v => v && typeof v === 'object' && 'percentage_per_week' in v;
-
-  const formatSmart = v => {
-    if (v === null || v === undefined || v === '' || v === 'None' || v === 'null') return '';
-    if (typeof v === 'boolean') return v ? 'Yes' : 'No';
-    if (isMoney(v)) {
-      if (!v.amount && v.amount !== 0) return v.note || '';
-      const amt = Number(v.amount).toLocaleString('en-IN', { maximumFractionDigits: 2 });
-      const den = v.denomination && v.denomination !== 'None' && v.denomination !== 'null' ? ` ${v.denomination}` : '';
-      return `${v.currency || 'INR'} ${amt}${den}`;
-    }
-    if (isDateTime(v)) {
-      if (!v.date) return '';
-      if (!v.time) return v.date;
-      const tz = v.timezone || v.tz || 'IST';
-      return `${v.date}  ·  ${v.time} ${tz}`;
-    }
-    if (isDuration(v)) return v.duration ? `${v.duration} ${v.unit}` : '';
-    if (isLiqDmg(v)) {
-      const p = [];
-      if (v.percentage_per_week) p.push(`${v.percentage_per_week}/week`);
-      if (v.max_cap_percentage)  p.push(`max cap: ${v.max_cap_percentage}`);
-      return p.join(', ');
-    }
-    if (typeof v !== 'object') return String(v);
-    return null;
-  };
-
-  const TH = { padding: '7px 10px', fontSize: '12px', fontWeight: 600, background: 'var(--bg-hover,#f9fafb)', color: 'var(--text-muted)', textAlign: 'left', borderBottom: '1px solid var(--border-color,#e5e7eb)' };
-  const TD = { padding: '8px 10px', fontSize: '13px', verticalAlign: 'top', borderBottom: '1px solid var(--border-color,#e5e7eb)' };
-
-  const renderFieldValue = v => {
-    const smart = formatSmart(v);
-    if (smart !== null) return smart || <span style={{ color: 'var(--text-muted)' }}>—</span>;
-
-    if (Array.isArray(v)) {
-      if (v.length === 0) return <span style={{ color: 'var(--text-muted)' }}>—</span>;
-      const f = v[0];
-      if (typeof f === 'string') return (
-        <ul style={{ margin: 0, paddingLeft: 18 }}>
-          {v.map((s, i) => <li key={i} style={{ paddingBottom: 3, fontSize: '13px' }}>{s}</li>)}
-        </ul>
-      );
-      if (f && 'criterion' in f && 'requirement' in f) return (
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead><tr><th style={{ ...TH, width: '40%' }}>Criterion</th><th style={TH}>Requirement</th></tr></thead>
-          <tbody>{v.map((r, i) => (
-            <tr key={i} style={{ background: i % 2 ? 'var(--bg-hover,#f9fafb)' : undefined }}>
-              <td style={TD}>{r.criterion}</td><td style={TD}>{r.requirement}</td>
-            </tr>
-          ))}</tbody>
-        </table>
-      );
-      if (f && 'category' in f && 'details' in f) return (
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead><tr><th style={{ ...TH, width: '30%' }}>Category</th><th style={TH}>Details</th></tr></thead>
-          <tbody>{v.map((r, i) => (
-            <tr key={i} style={{ background: i % 2 ? 'var(--bg-hover,#f9fafb)' : undefined }}>
-              <td style={{ ...TD, fontWeight: 500 }}>{r.category}</td><td style={TD}>{r.details}</td>
-            </tr>
-          ))}</tbody>
-        </table>
-      );
-      if (f && 'stage' in f) return (
-        <ol style={{ margin: 0, paddingLeft: 20, fontSize: '13px' }}>
-          {v.map((m, i) => <li key={i} style={{ paddingBottom: 4 }}>
-            <strong>{m.stage}</strong>{m.percentage ? ` — ${m.percentage}` : ''}{m.description ? `: ${m.description}` : ''}
-          </li>)}
-        </ol>
-      );
-      if (f && 'group_name' in f) return (
-        <div style={{ fontSize: '13px' }}>
-          {v.map((g, i) => (
-            <div key={i} style={{ marginBottom: 10 }}>
-              {g.group_name && <div style={{ fontWeight: 600, color: 'var(--text-muted)', fontSize: '11px', textTransform: 'uppercase', marginBottom: 4 }}>{g.group_name}</div>}
-              <div style={{ paddingLeft: g.group_name ? 8 : 0, whiteSpace: 'pre-wrap' }}>{g.documents}</div>
-            </div>
-          ))}
-        </div>
-      );
-      if (f && 'type' in f && 'percentage' in f) return (
-        <div style={{ fontSize: '13px' }}>
-          {v.map((g, i) => <div key={i}>{g.type}: {g.percentage || '—'}</div>)}
-        </div>
-      );
-      if (f && 'grade' in f) return (
-        <div style={{ fontSize: '13px' }}>
-          {v.map((g, i) => <div key={i}>Grade {g.grade}: {g.percentage || '—'}</div>)}
-        </div>
-      );
-      if (f && 'name' in f) return (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-          {v.map((c, i) => (
-            <div key={i} style={{ border: '1px solid var(--border-color)', borderRadius: 8, padding: '8px 12px', background: 'var(--bg-hover,#f9fafb)', minWidth: 140 }}>
-              {c.name && <div style={{ fontWeight: 600, fontSize: '13px', marginBottom: 2 }}>{c.name}</div>}
-              {c.role && <div style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{c.role}</div>}
-              {c.email && <div style={{ color: 'var(--primary)', fontSize: '11px', marginTop: 2 }}>{c.email}</div>}
-            </div>
-          ))}
-        </div>
-      );
-      return (
-        <ul style={{ margin: 0, paddingLeft: 18, fontSize: '13px' }}>
-          {v.map((item, i) => <li key={i}>{typeof item === 'object' ? Object.values(item).filter(Boolean).join(' · ') : String(item)}</li>)}
-        </ul>
-      );
-    }
-
-    if (typeof v === 'object' && v !== null) {
-      const entries = Object.entries(v).filter(([, val]) => val !== null && val !== undefined && val !== '');
-      if (entries.length === 0) return <span style={{ color: 'var(--text-muted)' }}>—</span>;
-      if (entries.length === 1 && typeof entries[0][1] !== 'object' && !Array.isArray(entries[0][1])) {
-        return <span style={{ fontSize: '13px' }}>{entries[0][1]}</span>;
-      }
-      if (entries.every(([, val]) => typeof val !== 'object' && !Array.isArray(val))) {
-        return (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {entries.map(([k, val]) => (
-              <div key={k} style={{ padding: '4px 10px', background: 'var(--bg-hover,#f9fafb)', borderRadius: 6, fontSize: '12px', border: '1px solid var(--border-color)' }}>
-                <span style={{ color: 'var(--text-muted)', marginRight: 4 }}>{k.replace(/_/g, ' ')}:</span>
-                <span style={{ fontWeight: 500 }}>{val}</span>
-              </div>
-            ))}
-          </div>
-        );
-      }
-      return (
-        <div style={{ fontSize: '13px' }}>
-          {entries.map(([k, val]) => {
-            const s = formatSmart(val);
-            return (
-              <div key={k} style={{ marginBottom: 8 }}>
-                <div style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600, marginBottom: 4 }}>{k.replace(/_/g, ' ')}</div>
-                {s !== null ? <div style={{ whiteSpace: 'pre-wrap' }}>{s || '—'}</div> : renderFieldValue(val)}
-              </div>
-            );
-          })}
-        </div>
-      );
-    }
-    return <span style={{ color: 'var(--text-muted)' }}>—</span>;
-  };
-
-  const renderSmartSection = (sectionKey, sectionValue) => {
-    // Technical bid documents — only show grouped_documents list
-    if (sectionKey === 'technical_bid_documents') {
-      const docs = sectionValue?.grouped_documents;
-      if (!docs || (Array.isArray(docs) && docs.length === 0)) {
-        return <div style={{ padding: 16, color: 'var(--text-muted)', fontSize: '13px', textAlign: 'center' }}>No bid documents listed</div>;
-      }
-      return <div style={{ padding: '12px 16px' }}>{renderFieldValue(docs)}</div>;
-    }
-
-    if (sectionKey === 'legacy_sections' && Array.isArray(sectionValue)) {
-      return (
-        <div style={{ padding: '4px 16px 16px' }}>
-          {sectionValue.map((section, si) => (
-            <div key={si} style={{ marginBottom: 16 }}>
-              <div style={{ fontWeight: 600, fontSize: '14px', padding: '8px 0', borderBottom: '2px solid var(--border-color)' }}>{section.heading}</div>
-              {(section.sub_headings || []).map((sub, si2) => (
-                <div key={si2} style={{ display: 'flex', gap: 12, padding: '8px 0', borderBottom: '1px solid var(--border-color,#e5e7eb)' }}>
-                  <span style={{ minWidth: 200, color: 'var(--text-muted)', fontSize: '12px', fontWeight: 500 }}>{sub.heading}</span>
-                  <span style={{ flex: 1, fontSize: '13px', whiteSpace: 'pre-wrap' }}>{sub.content || '—'}</span>
-                </div>
-              ))}
-            </div>
-          ))}
-        </div>
-      );
-    }
-    if (Array.isArray(sectionValue)) {
-      return <div style={{ padding: '12px 16px' }}>{renderFieldValue(sectionValue)}</div>;
-    }
-    if (typeof sectionValue === 'object' && sectionValue !== null) {
-      const entries = Object.entries(sectionValue).filter(([, v]) => {
-        if (v === null || v === undefined || v === '' || v === 'None') return false;
-        if (Array.isArray(v) && v.length === 0) return false;
-        if (typeof v === 'object' && !Array.isArray(v)) {
-          const s = formatSmart(v);
-          if (s !== null) return s !== '';
-          return Object.values(v).some(x => x !== null && x !== undefined && x !== '');
-        }
-        return true;
-      });
-      if (entries.length === 0) return (
-        <div style={{ padding: 16, color: 'var(--text-muted)', fontSize: '13px', textAlign: 'center' }}>No data extracted</div>
-      );
-      return (
-        <div style={{ padding: '4px 16px 16px' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <tbody>
-              {entries.map(([key, val]) => {
-                const label = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-                const smart = formatSmart(val);
-                return (
-                  <tr key={key} style={{ borderBottom: '1px solid var(--border-color,#e5e7eb)', verticalAlign: 'top' }}>
-                    <td style={{ padding: '9px 16px 9px 0', width: 190, minWidth: 150, color: 'var(--text-muted)', fontSize: '12px', fontWeight: 600, whiteSpace: 'nowrap' }}>
-                      {label}
-                    </td>
-                    <td style={{ padding: '9px 0', fontSize: '13px', color: 'var(--text-primary)' }}>
-                      {smart !== null ? (smart || <span style={{ color: 'var(--text-muted)' }}>—</span>) : renderFieldValue(val)}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      );
-    }
-    return <div style={{ padding: '12px 16px', fontSize: '13px' }}>{String(sectionValue)}</div>;
-  };
-  // ─────────────────────────────────────────────────────────────────────────────
 
   return (
     <>
@@ -579,14 +252,9 @@ export default function DetailsScreen({
           {!isEditing ? (
             <>
               <button onClick={() => setIsEditing(true)} className="btn btn-sec">Edit</button>
-              <button
-                onClick={handleDownload}
-                disabled={pdfLoading}
-                className="btn btn-sec"
-                title={pdfError ? `PDF error: ${pdfError}` : undefined}
-              >
-                {pdfLoading ? 'Preparing…' : pdfError ? 'Download ⚠️' : 'Download'}
-              </button>
+              <button className="btn btn-primary" onClick={handleDownload}>
+              Download PDF
+            </button>
             </>
           ) : (
             <>
@@ -645,9 +313,10 @@ export default function DetailsScreen({
             </div>
           </div>
 
-          {/* AI-extracted fields — shown in both view and edit modes */}
+          {/* Tender Information (fully flattened onto Tenders) — shown in both view
+              and edit modes; Key Dates still reads from aiData since key_dates stays
+              inside AIResults.rawResponse. */}
           {(() => {
-            const d = tender.details;
             const sectionLabel = (text) => (
               <p style={{ margin: '0 0 14px', fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{text}</p>
             );
@@ -659,44 +328,66 @@ export default function DetailsScreen({
                 </div>
               </div>
             );
+            const editField = (key, label, value, setValue) => (
+              <div key={key} className="form-group">
+                <label>{label}</label>
+                <input type="text" value={value} onChange={e => setValue(e.target.value)} className="form-input" />
+              </div>
+            );
+
             const tiFields = [
               frozenField('Reference No',      tender.tenderNo),
-              frozenField('Issuing Authority', d.issuingAuthority),
-              frozenField('Contract Type',     d.contractType),
-              frozenField('Bid System',        d.bidSystem),
-              frozenField('Funding Agency',    d.fundingAgency),
-              frozenField('Tender Fee',        d.tenderFee),
-              frozenField('Budget Category',   d.budgetCategory),
+              frozenField('Issuing Authority', issuingAuthority),
+              frozenField('Contract Type',     contractType),
+              frozenField('Bid System',        bidSystem),
+              frozenField('Funding Agency',    fundingAgency),
+              frozenField('Tender Fee',        tenderFee),
+              frozenField('Budget Category',   budgetCategory),
             ].filter(Boolean);
+            const tiEditFields = [
+              frozenField('Reference No', tender.tenderNo), // dedup key — not directly editable here
+              editField('issuingAuthority', 'Issuing Authority', issuingAuthority, setIssuingAuthority),
+              editField('contractType',     'Contract Type',     contractType,     setContractType),
+              editField('bidSystem',        'Bid System',        bidSystem,        setBidSystem),
+              editField('fundingAgency',    'Funding Agency',    fundingAgency,    setFundingAgency),
+              editField('tenderFee',        'Tender Fee',        tenderFee,        setTenderFee),
+              editField('budgetCategory',   'Budget Category',   budgetCategory,   setBudgetCategory),
+            ].filter(Boolean);
+
+            // New schema: key_dates is nested inside tender_overview.
+            // Old schema: key_dates was a top-level section in rawResponse.
+            const kd = aiData?.tender_overview?.key_dates || aiData?.key_dates || {};
             const kdFields = [
-              frozenField('Publication Date',        d.publicationDate),
-              frozenField('Pre-Bid Meeting',         d.preBidMeeting),
-              frozenField('Bid Submission Deadline', d.bidSubmissionDeadline),
-              frozenField('Technical Opening',       d.technicalOpening),
-              frozenField('Financial Opening',       d.financialOpening),
-              frozenField('Work Order Issuance',     d.workOrderIssuance),
+              frozenField('Publication Date',        fmtDateTime(kd.publication)),
+              frozenField('Pre-Bid Meeting',         fmtDateTime(kd.pre_bid_meeting)),
+              frozenField('Bid Submission Deadline', fmtDateTime(kd.bid_submission_deadline)),
+              frozenField('Technical Opening',       fmtDateTime(kd.technical_opening)),
+              frozenField('Financial Opening',       fmtDateTime(kd.financial_opening)),
+              frozenField('Work Order Issuance',     fmtDateTime(kd.work_order_issuance)),
             ].filter(Boolean);
-            const contacts = aiData?.tender_information?.contacts || [];
-            const hasTI = isEditing ? !!aiData?.tender_information : tiFields.length > 0;
-            const hasKD = isEditing ? !!aiData?.key_dates         : kdFields.length > 0;
-            const hasContacts = contacts.length > 0;
-            if (!hasTI && !hasKD && !hasContacts) return null;
+
+            const hasTI = !!(tender.tenderNo || issuingAuthority || contractType || bidSystem || fundingAgency || tenderFee || budgetCategory);
+            const hasKD = isEditing ? !!kd && Object.keys(kd).length > 0 : kdFields.length > 0;
+            const hasContacts = isEditing || contacts.length > 0;
+
+            const updateContact = (i, field, value) =>
+              setContacts(prev => prev.map((c, idx) => idx === i ? { ...c, [field]: value } : c));
+            const removeContact = i => setContacts(prev => prev.filter((_, idx) => idx !== i));
+            const addContact = () => setContacts(prev => [...prev, { name: '', role: '', email: '' }]);
+
             return (
               <>
                 {hasTI && (
                   <div style={{ borderTop: '1px solid var(--border-color)', padding: '20px 24px 0' }}>
                     {sectionLabel('Tender Information')}
-                    {isEditing
-                      ? <div style={{ paddingBottom: 16 }}>{renderObjectField(aiData.tender_information, 'tender_information', '', 0)}</div>
-                      : <div className="details-grid">{tiFields}</div>
-                    }
+                    <div className="details-grid">{isEditing ? tiEditFields : tiFields}</div>
                   </div>
                 )}
                 {hasKD && (
                   <div style={{ borderTop: '1px solid var(--border-color)', padding: '20px 24px 0' }}>
                     {sectionLabel('Key Dates')}
                     {isEditing
-                      ? <div style={{ paddingBottom: 16 }}>{renderObjectField(aiData.key_dates, 'key_dates', '', 0)}</div>
+                      ? <div style={{ paddingBottom: 16 }}>{renderObjectField(kd, 'key_dates', '', 0, isEditing, aiEdits, setAiEdits)}</div>
                       : <div className="details-grid">{kdFields}</div>
                     }
                   </div>
@@ -704,20 +395,39 @@ export default function DetailsScreen({
                 {hasContacts && (
                   <div style={{ borderTop: '1px solid var(--border-color)', padding: '20px 24px' }}>
                     {sectionLabel('Contacts')}
-                    {isEditing
-                      ? <div style={{ paddingBottom: 8 }}>{renderObjectField(contacts, 'tender_information.contacts', '', 0)}</div>
-                      : (
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-                          {contacts.map((c, i) => (
-                            <div key={i} style={{ border: '1px solid var(--border-color)', borderRadius: 8, padding: '10px 14px', background: 'var(--bg-hover,#f9fafb)', minWidth: 160 }}>
-                              {c.name  && <div style={{ fontWeight: 600, fontSize: '13px', marginBottom: 2 }}>{c.name}</div>}
-                              {c.role  && <div style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{c.role}</div>}
-                              {c.email && <div style={{ color: 'var(--primary)', fontSize: '11px', marginTop: 3 }}>{c.email}</div>}
-                            </div>
-                          ))}
-                        </div>
-                      )
-                    }
+                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                      <thead>
+                        <tr>
+                          <th style={TABLE_TH}>Name</th>
+                          <th style={TABLE_TH}>Role</th>
+                          <th style={TABLE_TH}>Email</th>
+                          {isEditing && <th style={{ ...TABLE_TH, width: 90 }} />}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {contacts.map((c, i) => (
+                          <tr key={i} style={{ background: i % 2 ? 'var(--bg-hover,#f9fafb)' : undefined }}>
+                            {isEditing ? (
+                              <>
+                                <td style={TABLE_TD}><input type="text" value={c.name  || ''} onChange={e => updateContact(i, 'name',  e.target.value)} className="form-input" /></td>
+                                <td style={TABLE_TD}><input type="text" value={c.role  || ''} onChange={e => updateContact(i, 'role',  e.target.value)} className="form-input" /></td>
+                                <td style={TABLE_TD}><input type="text" value={c.email || ''} onChange={e => updateContact(i, 'email', e.target.value)} className="form-input" /></td>
+                                <td style={TABLE_TD}><button type="button" onClick={() => removeContact(i)} className="btn btn-ghost">Remove</button></td>
+                              </>
+                            ) : (
+                              <>
+                                <td style={{ ...TABLE_TD, fontWeight: 600 }}>{c.name || '—'}</td>
+                                <td style={TABLE_TD}>{c.role || '—'}</td>
+                                <td style={TABLE_TD}>{c.email || '—'}</td>
+                              </>
+                            )}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {isEditing && (
+                      <button type="button" onClick={addContact} className="btn btn-sec" style={{ marginTop: 10 }}>+ Add Contact</button>
+                    )}
                   </div>
                 )}
               </>
@@ -742,6 +452,15 @@ export default function DetailsScreen({
           {!aiLoading && aiData && (() => {
             const sections = [...Object.entries(aiData)]
               .filter(([k]) => !SKIP_SECTIONS.has(k))
+              // technical_bid_documents comes nested inside contract_and_bidding —
+              // split it out so it renders as its own section instead of buried inside.
+              .flatMap(([k, v]) => {
+                if (k === 'contract_and_bidding' && v && typeof v === 'object' && v.technical_bid_documents) {
+                  const { technical_bid_documents, ...rest } = v;
+                  return [['contract_and_bidding', rest], ['technical_bid_documents', technical_bid_documents]];
+                }
+                return [[k, v]];
+              })
               .sort(([a], [b]) => {
                 const ai = SECTION_ORDER.indexOf(a), bi = SECTION_ORDER.indexOf(b);
                 if (ai === -1 && bi === -1) return 0;
@@ -752,31 +471,14 @@ export default function DetailsScreen({
             return (
               <div style={{ borderTop: '1px solid var(--border-color)' }}>
                 {sections.map(([sectionKey, sectionValue], idx) => {
-                  const isOpen = expandedSection === idx;
                   const label = SECTION_LABELS[sectionKey] || sectionKey.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
                   return (
-                    <div key={idx} style={{ borderTop: idx > 0 ? '1px solid var(--border-color)' : 'none' }}>
-                      <button
-                        onClick={() => setExpandedSection(isOpen ? null : idx)}
-                        style={{
-                          width: '100%', textAlign: 'left', padding: '14px 24px',
-                          background: isOpen ? 'var(--bg-hover,#f9fafb)' : 'transparent',
-                          border: 'none', cursor: 'pointer', display: 'flex',
-                          justifyContent: 'space-between', alignItems: 'center',
-                          fontWeight: 600, fontSize: '14px',
-                        }}
-                      >
-                        <span>{label}</span>
-                        <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{isOpen ? '▲' : '▼'}</span>
-                      </button>
-                      {isOpen && (
-                        <div style={{ borderTop: '1px solid var(--border-color)', background: 'var(--bg-hover,#f9fafb)' }}>
-                          {isEditing
-                            ? <div style={{ padding: '12px 24px' }}>{renderObjectField(sectionValue, sectionKey, '', 0)}</div>
-                            : renderSmartSection(sectionKey, sectionValue)
-                          }
-                        </div>
-                      )}
+                    <div key={idx} style={{ borderTop: idx > 0 ? '1px solid var(--border-color)' : 'none', padding: '20px 24px 0' }}>
+                      <p style={{ margin: '0 0 4px', fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</p>
+                      {isEditing
+                        ? <div style={{ paddingBottom: 16 }}>{renderObjectField(sectionValue, sectionKey, '', 0, isEditing, aiEdits, setAiEdits)}</div>
+                        : renderSmartSection(sectionKey, sectionValue)
+                      }
                     </div>
                   );
                 })}

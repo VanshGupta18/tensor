@@ -93,6 +93,16 @@ export async function streamChatMessage(message, tenderId = null, onChunk, histo
  * @returns {Promise<object>} - Parsed AI result JSON.
  */
 /**
+ * Calculate SHA-256 hash of a file using Web Crypto API.
+ */
+async function calculateFileHash(file) {
+  const buffer = await file.arrayBuffer();
+  const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
  * Upload a PDF for AI processing.
  *
  * Request path:  Browser → Vite proxy (/upload) → CAP (:4004/upload)
@@ -109,6 +119,15 @@ export async function uploadFileForProcessing(file, tenderId = null) {
   const formData = new FormData();
   formData.append('invoice', file);           // field name must match multer config
   if (tenderId) formData.append('tenderId', tenderId);
+  
+  // Append client-side hash and size for deduplication and validation
+  try {
+    const fileHash = await calculateFileHash(file);
+    formData.append('fileHash', fileHash);
+    formData.append('fileSize', file.size.toString());
+  } catch (err) {
+    console.warn('Failed to calculate file hash:', err);
+  }
 
   // No Content-Type header — the browser sets it automatically with the
   // correct multipart boundary when body is FormData.
@@ -132,13 +151,43 @@ export async function uploadFileForProcessing(file, tenderId = null) {
     throw new Error(errMsg);
   }
 
-  // CAP wraps action returns in { value: <string> }; unwrap and parse
-  const json      = await response.json();
+  // The new asynchronous backend immediately returns a 202 Accepted with a jobId
+  if (response.status === 202) {
+    const { jobId } = await response.json();
+    return await pollJobStatus(jobId);
+  }
+
+  // Fallback for older synchronous behavior (if still returned)
+  const json = await response.json();
   const rawString = json?.value ?? json;
   try {
     return typeof rawString === 'string' ? JSON.parse(rawString) : rawString;
   } catch {
     return { results: [], message: String(rawString) };
+  }
+}
+
+/**
+ * Polls the backend for job completion status.
+ */
+async function pollJobStatus(jobId) {
+  while (true) {
+    await new Promise(resolve => setTimeout(resolve, 3000)); // poll every 3s
+    const res = await fetch(`/upload/status/${jobId}`);
+    if (!res.ok) throw new Error(`Status check failed: HTTP ${res.status}`);
+    
+    const job = await res.json();
+    if (job.status === 'completed') {
+      const rawString = job.result?.value ?? job.result;
+      try {
+        return typeof rawString === 'string' ? JSON.parse(rawString) : rawString;
+      } catch {
+        return { results: [], message: String(rawString) };
+      }
+    } else if (job.status === 'failed') {
+      throw new Error(job.error || 'Upload processing failed asynchronously');
+    }
+    // if 'processing', loop again
   }
 }
 

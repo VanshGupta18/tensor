@@ -226,6 +226,16 @@ p { color: var(--slate); }
   white-space: nowrap;
 }
 
+.sb-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
+}
+
+.sb-item.active {
+  background: var(--copper);
+  color: #fff;
+}
+
 .sidebar.collapsed .sb-text {
   opacity: 0;
   pointer-events: none;
@@ -827,6 +837,7 @@ select.form-input { cursor: pointer; }
   100% { background-position: -100% 0; }
 }
 
+:root {
   --success:       #16A05C;
   --success-bg:    #E7F7EF;
   --warning:       #B08020;
@@ -855,6 +866,5 @@ select.form-input { cursor: pointer; }
 @media (max-width: 768px) {
   .app-container.chat-open {
     padding-right: 0; /* panel overlays content; overlay dims background instead */
-  }
   }
 }

@@ -18,10 +18,10 @@ React → CAP (Node.js) → this service.
 import os
 import json
 import uuid
-import shutil
 import hashlib
 import threading
 import time
+from collections import OrderedDict
 from io import BytesIO
 from pathlib import Path
 
@@ -29,58 +29,23 @@ from flask import Flask, request, jsonify, send_file, Response
 from flask_cors import CORS
 from dotenv import load_dotenv
 
-from functions import (
-    get_access_token,
-    split_pdf,
-    extract_facts_from_chunks,
-    merge_chunk_facts,
-    synthesize_final_json,
-    synonym_based_validation,
-    targeted_retrieval,
-    validate_correctness,
-    ensure_schema_completeness,
-    generate_chat_response,
-    generate_chat_response_stream,
-    _has_text,
-    _upload_semaphore,
-)
-from pdf_generator import generate_tender_pdf
+from rag_pipeline.step2_llm_client import get_token
+from rag_pipeline.step5_extractor import extract_via_targeted_retrieval, _upload_semaphore
+from rag_pipeline.step4_validators import validate_correctness, ensure_schema_completeness
+from rag_pipeline.step6_chat import generate_chat_response, generate_chat_response_stream
+from rag_pipeline.step7_pdf_generator import generate_tender_pdf
 
 # ── Environment ────────────────────────────────────────────────────────────────
 load_dotenv()
 
 API_URL = str(os.getenv("MODEL_BASE_URL", "")) + str(os.getenv("MODEL_ENDPOINT", ""))
 
-CREDENTIALS = {
-    "TOKEN_URL":      os.getenv("TOKEN_URL"),
-    "CLIENT_ID":      os.getenv("CLIENT_ID"),
-    "CLIENT_SECRET":  os.getenv("CLIENT_SECRET"),
-    "MODEL_BASE_URL": os.getenv("MODEL_BASE_URL"),
-    "MODEL_ENDPOINT": os.getenv("MODEL_ENDPOINT"),
-}
-
 UPLOAD_DIR = Path(__file__).parent / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 CACHE_DIR = UPLOAD_DIR / "cache"
 CACHE_DIR.mkdir(exist_ok=True)
 
-# ── Token — proactive refresh with a lock ─────────────────────────────────────
-# SAP AI Core tokens typically expire after 60 min. We treat them as valid for
-# 55 min and refresh proactively 60 s before expiry so no request ever hits a
-# stale token. A lock ensures only one thread refreshes at a time.
-_token_lock      = threading.Lock()
-_token_value: str = ""
-_token_expires_at: float = 0.0
-
-def get_token() -> str:
-    global _token_value, _token_expires_at
-    with _token_lock:
-        if time.time() >= (_token_expires_at - 60):
-            _token_value      = get_access_token(CREDENTIALS)
-            _token_expires_at = time.time() + 55 * 60
-        return _token_value
-
-# Fetch on startup
+# Fetch token on startup
 get_token()
 
 # ── Flask app ──────────────────────────────────────────────────────────────────
@@ -93,6 +58,64 @@ CORS(app, resources={r"/*": {"origins": ["http://localhost:4004", "http://127.0.
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok"})
+
+
+# ── Live analytics (in-memory only — nothing here is persisted to a database) ───
+# The Analytics screen polls GET /analytics/live instead of reading stored HANA
+# rows, so this process's memory is the only source of truth. Capped ring buffer:
+# entries are lost on restart and old ones evicted past _MAX_SESSIONS, by design.
+_MAX_SESSIONS = 20
+_analytics_lock = threading.Lock()
+_analytics_sessions = OrderedDict()   # id -> session dict, insertion order = oldest first
+
+
+def _analytics_start(session_id, filename):
+    with _analytics_lock:
+        _analytics_sessions[session_id] = {
+            "id": session_id,
+            "filename": filename,
+            "status": "processing",
+            "groupsDone": 0,
+            "groupsTotal": 6,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cacheReadTokens": 0,
+            "cacheWriteTokens": 0,
+            "startedAt": time.time(),
+            "elapsedSec": 0,
+        }
+        while len(_analytics_sessions) > _MAX_SESSIONS:
+            _analytics_sessions.popitem(last=False)
+
+
+def _analytics_progress(session_id, group_name, usage, groups_done):
+    with _analytics_lock:
+        session = _analytics_sessions.get(session_id)
+        if not session:
+            return
+        session["groupsDone"] = groups_done
+        session["inputTokens"] = usage.get("input_tokens", 0)
+        session["outputTokens"] = usage.get("output_tokens", 0)
+        session["cacheReadTokens"] = usage.get("cache_read_input_tokens", 0)
+        session["cacheWriteTokens"] = usage.get("cache_creation_input_tokens", 0)
+        session["elapsedSec"] = round(time.time() - session["startedAt"], 2)
+        session["lastGroup"] = group_name
+
+
+def _analytics_finish(session_id, status="done"):
+    with _analytics_lock:
+        session = _analytics_sessions.get(session_id)
+        if not session:
+            return
+        session["status"] = status
+        session["elapsedSec"] = round(time.time() - session["startedAt"], 2)
+
+
+@app.route("/analytics/live", methods=["GET"])
+def analytics_live():
+    with _analytics_lock:
+        sessions = list(reversed(_analytics_sessions.values()))
+    return jsonify({"sessions": sessions})
 
 
 # ── POST /process_file ─────────────────────────────────────────────────────────
@@ -143,58 +166,44 @@ def process_file():
     # ⚠️  NEVER set this above ~60 s in dev: the Vite proxy's socket idle timeout
     # will fire and the client receives a 502 before the response arrives.
     # For true no-delay (CI / automated tests), set CACHE_REPLAY_DELAY_SECS=0.
+    start_time = time.time()
     pdf_bytes = file.read()
     file_hash = hashlib.sha256(pdf_bytes).hexdigest()
-    cache_file = CACHE_DIR / f"{file_hash}.json"
-    if cache_file.exists():
-        delay = int(os.getenv("CACHE_REPLAY_DELAY_SECS", "3"))
-        print(f"[cache] HIT  {file.filename} ({file_hash[:12]}…) — replaying in {delay}s")
-        if delay > 0:
-            time.sleep(delay)
-        return jsonify(json.loads(cache_file.read_text(encoding="utf-8")))
-    print(f"[cache] MISS {file.filename} ({file_hash[:12]}…) — running full pipeline")
+    file.seek(0)
     file.seek(0)
 
     # 1 + 2. Save uploaded PDF with a unique prefix to prevent filename collisions
-    # between concurrent uploads of identically-named files.
+    # between concurrent uploads of identically-named files. Doubles as the live
+    # analytics session id — already unique per upload.
     safe_filename = f"{uuid.uuid4().hex[:8]}_{file.filename}"
     file_path = UPLOAD_DIR / safe_filename
     file.save(str(file_path))
-    split_dir = file_path.parent / (file_path.stem + "_split")
-
-    # 3. Split — text PDFs: 30 pages/chunk, 2-page overlap so multi-row tables
-    #    (price variation, QR options, payment milestones) are not silently split
-    #    at chunk boundaries. Image PDFs: 15 pages/chunk, no overlap.
-    is_text_pdf     = _has_text(str(file_path))
-    pages_per_chunk = 30 if is_text_pdf else 15
-    chunk_overlap   = 2  if is_text_pdf else 0
-    file_path_list  = split_pdf(str(file_path), pages_per_chunk, overlap=chunk_overlap)
 
     if not _upload_semaphore.acquire(timeout=10):
         return jsonify({"error": "Server busy — too many uploads in progress. Please try again shortly."}), 503
 
+    _analytics_start(safe_filename, file.filename)
     try:
         # Pass get_token as a callable so each chunk call fetches a fresh token,
         # preventing 401 errors when extraction runs longer than the token lifetime.
-        chunk_texts  = extract_facts_from_chunks(get_token, API_URL, file_path_list)
-        merged_facts = merge_chunk_facts(chunk_texts)
-        final_json   = synthesize_final_json(get_token(), API_URL, merged_facts)
-        final_json   = synonym_based_validation(final_json, merged_facts)
-        # Pass 1.7 — file_path still exists here; grep for critical missing fields
-        final_json   = targeted_retrieval(get_token, API_URL, str(file_path), final_json)
+        final_json   = extract_via_targeted_retrieval(
+            get_token, API_URL, str(file_path), file_hash,
+            on_group_done=lambda name, usage, n: _analytics_progress(safe_filename, name, usage, n),
+        )
         final_json   = validate_correctness(final_json)
         final_json   = ensure_schema_completeness(final_json)
     except Exception as e:
+        _analytics_finish(safe_filename, status="error")
         return jsonify({"error": str(e)}), 500
     finally:
         _upload_semaphore.release()
-        # Clean up the original upload and all split chunks regardless of outcome
+        # The upload-temp copy is no longer needed — ingest_pdf() already persisted a
+        # durable copy under storage/documents/<hash>.pdf for later chat retrieval.
         try:
             file_path.unlink(missing_ok=True)
         except Exception:
             pass
-        if split_dir.exists():
-            shutil.rmtree(str(split_dir), ignore_errors=True)
+    _analytics_finish(safe_filename, status="done")
 
     raw_tenders = final_json.get("tenders", [])
 
@@ -204,22 +213,21 @@ def process_file():
 
     output_tenders = []
     for tender_doc in raw_tenders:
-        title = tender_doc.get("tender_information", {}).get("title", "")
+        # Support both new schema (tender_overview) and old (tender_information)
+        overview = tender_doc.get("tender_overview") or tender_doc.get("tender_information") or {}
+        title = overview.get("title", "")
         output_tenders.append({
-            "confidenceScore": "high",
-            "summary":         title or "Tender document processed",
-            "keyTerms":        ["tender_information", "key_dates", "scope_of_work", "eligibility_and_qualification", "security_and_financials", "payment_terms", "price_variation", "contract_conditions", "technical_bid_documents"],
+            # summary feeds the PDF title (CAP's generatePDF action); keep generating it.
+            "summary":      title or "Tender document processed",
+            "documentHash": file_hash,
             **tender_doc
         })
 
-    output = {"tenders": output_tenders}
+    end_time = time.time()
+    analytics = final_json.get("_analytics", {})
+    analytics["processingTimeSec"] = round(end_time - start_time, 2)
 
-    # Persist result so the same PDF is instant next time
-    try:
-        cache_file.write_text(json.dumps(output, ensure_ascii=False), encoding="utf-8")
-        print(f"[cache] Saved result for {file_hash[:12]}… → {cache_file.name}")
-    except Exception as e:
-        print(f"[cache] WARNING: could not write cache: {e}")
+    output = {"tenders": output_tenders, "_analytics": analytics}
 
     return jsonify(output)
 
@@ -232,7 +240,9 @@ def process_file():
 def generate_pdf():
     data = request.get_json(force=True) or {}
     tender = data.get("tender", {})
-    title  = data.get("title", tender.get("tender_information", {}).get("title", "Tender Synopsis"))
+    # Support both new (tender_overview) and old (tender_information) key for PDF title
+    _overview = tender.get("tender_overview") or tender.get("tender_information") or {}
+    title = data.get("title", _overview.get("title", "Tender Synopsis"))
 
     if not tender:
         return jsonify({"error": "No tender data provided"}), 400
@@ -268,6 +278,7 @@ def response():
     data      = request.get_json(force=True) or {}
     message   = (data.get("message")  or "").strip()
     tender_id = (data.get("tenderId") or "").strip()
+    content_hash = (data.get("contentHash") or "").strip()
 
     if not message:
         return jsonify({"error": "No message provided"}), 400
@@ -275,7 +286,7 @@ def response():
         return jsonify({"error": "Message too long. Maximum 10,000 characters."}), 400
 
     try:
-        reply = generate_chat_response(get_token(), API_URL, message, tender_id)
+        reply = generate_chat_response(get_token(), API_URL, message, tender_id, content_hash=content_hash)
     except Exception as e:
         reply = f"AI service error: {str(e)}"
 
@@ -292,6 +303,7 @@ def stream_response():
     message   = (data.get("message")  or "").strip()
     tender_id = (data.get("tenderId") or "").strip()
     history   = data.get("history") or []
+    content_hash = (data.get("contentHash") or "").strip()
     if not isinstance(history, list):
         history = []
 
@@ -311,11 +323,11 @@ def stream_response():
             # stream=True is unsupported, so fall back to non-streaming on any error.
             streamed = False
             try:
-                for chunk in generate_chat_response_stream(token, API_URL, message, tender_id, history):
+                for chunk in generate_chat_response_stream(token, API_URL, message, tender_id, history, content_hash):
                     yield f"data: {json.dumps({'text': chunk})}\n\n"
                     streamed = True
             except Exception:
-                reply = generate_chat_response(token, API_URL, message, tender_id, history)
+                reply = generate_chat_response(token, API_URL, message, tender_id, history, content_hash)
                 yield f"data: {json.dumps({'text': reply})}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
@@ -336,5 +348,5 @@ def stream_response():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     print(f"[AI Service] Starting on port {port}")
-    print(f"[AI Service] Endpoints: POST /process_file  |  POST /response  |  GET /health")
+    print(f"[AI Service] Endpoints: POST /process_file  |  POST /response  |  GET /health  |  GET /analytics/live")
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)

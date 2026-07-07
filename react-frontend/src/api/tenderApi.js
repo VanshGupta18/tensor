@@ -31,19 +31,16 @@ function toReactShape(t) {
       status:                t.status,
       location:              t.location,
       contractor:            t.contractor,
-      // AI-extracted fields
-      issuingAuthority:      t.issuingAuthority,
-      contractType:          t.contractType,
-      bidSystem:             t.bidSystem,
-      fundingAgency:         t.fundingAgency,
-      tenderFee:             t.tenderFee,
-      budgetCategory:        t.budgetCategory,
-      publicationDate:       t.publicationDate,
-      preBidMeeting:         t.preBidMeeting,
-      bidSubmissionDeadline: t.bidSubmissionDeadline,
-      technicalOpening:      t.technicalOpening,
-      financialOpening:      t.financialOpening,
-      workOrderIssuance:     t.workOrderIssuance,
+      // AI-extracted fields — everything tender_information contains. key_dates
+      // fields are read from AIResults.rawResponse instead (see useTenderDocuments /
+      // DetailsScreen's aiData.key_dates) — they're not flattened onto Tenders.
+      issuingAuthority: t.issuingAuthority,
+      contractType:     t.contractType,
+      bidSystem:        t.bidSystem,
+      fundingAgency:    t.fundingAgency,
+      tenderFee:        t.tenderFee,
+      budgetCategory:   t.budgetCategory,
+      contacts:         t.contacts,
     },
     remarks: (t.audits || []).map(a => ({
       fieldName: a.fieldName,
@@ -71,8 +68,7 @@ function toCapShape(formValues, changedBy) {
   };
   const aiKeys = [
     'issuingAuthority', 'contractType', 'bidSystem', 'fundingAgency',
-    'tenderFee', 'budgetCategory', 'publicationDate', 'preBidMeeting',
-    'bidSubmissionDeadline', 'technicalOpening', 'financialOpening', 'workOrderIssuance',
+    'tenderFee', 'budgetCategory', 'contacts',
   ];
   for (const k of aiKeys) {
     if (formValues[k] !== undefined) shape[k] = formValues[k] || null;
@@ -162,11 +158,18 @@ export async function getTenderDocuments(tenderId) {
 /**
  * Update the rawResponse of an AIResult via a custom action.
  * Direct OData PATCH fails due to draft key validation on related entities.
+ *
+ * Stores tenderDoc exactly as given — no wrapper. The pipeline's canonical
+ * rawResponse shape is the flat 9-section tender object (matching what
+ * python-ai-service/CAP ingestion already stores on first upload); wrapping it in an
+ * extra `{ sections: ... }` envelope here used to corrupt the shape on every edit,
+ * making DetailsScreen's hydration mistake it for the old legacy array format and
+ * collapse all 9 sections into one "Legacy Section" panel.
  */
-export async function updateAIResult(id, sections) {
+export async function updateAIResult(id, tenderDoc) {
   return callAction('updateAIResult', {
     id,
-    rawResponse: JSON.stringify({ sections }),
+    rawResponse: JSON.stringify(tenderDoc),
   });
 }
 
@@ -208,9 +211,6 @@ export async function downloadTender(tender) {
       lastChangedBy:   tender.lastChangedBy,
       details:         tender.details,
       remarksHistory:  tender.remarks,
-      summary:         tender.summary         || null,
-      keyTerms:        tender.keyTerms        || null,
-      confidenceScore: tender.confidenceScore || null,
     };
     const jsonString = `data:text/json;charset=utf-8,${encodeURIComponent(JSON.stringify(downloadData, null, 2))}`;
     const a = document.createElement('a');

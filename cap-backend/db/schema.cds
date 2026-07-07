@@ -19,23 +19,23 @@ entity Tenders : managed {
         createdBy      : String(100);
         lastReviewedBy : String(100);
         lastChangedBy  : String(100);
-        // AI-extracted fields (populated by processFile, read-only in UI)
+        // AI-extracted fields — everything the tender_information section contains,
+        // populated by processFile, read-only display + editable here rather than
+        // duplicated inside AIResults.rawResponse.
         issuingAuthority     : String(500);
         contractType         : String(200);
         bidSystem            : String(200);
         fundingAgency        : String(500);
         tenderFee            : String(100);
         budgetCategory       : String(200);
-        publicationDate      : String(100);
-        preBidMeeting        : String(200);
-        bidSubmissionDeadline: String(200);
-        technicalOpening     : String(200);
-        financialOpening     : String(200);
-        workOrderIssuance    : String(200);
+        contacts             : LargeString;    // JSON array of {name, role, email}
+        // key_dates fields are NOT flattened here (they live in AIResults.rawResponse,
+        // one of the 8 remaining sections) — `deadline` above is the one exception,
+        // kept as a first-class column because dashboard sort/filter needs a real Date,
+        // not just a display value.
         // Associations
         audits         : Composition of many TenderAudits on audits.tender = $self;
         documents      : Composition of many Documents    on documents.tender = $self;
-        chatHistory    : Composition of many ChatHistories on chatHistory.tender = $self;
 }
 
 // ─────────────────────────────────────────────────
@@ -59,6 +59,10 @@ entity Documents : cuid {
     filename     : String(500);
     mimeType     : String(100);
     // content field removed — file bytes forwarded to Python then discarded, never persisted
+    // by CAP. Python itself now persists a copy locally (storage/documents/<contentHash>.pdf)
+    // for RAG chunk grounding — contentHash is the join key back to that copy and to the
+    // Postgres/pgvector chunks indexed under it.
+    contentHash  : String(64);
     uploadedBy   : String(100);
     uploadedAt   : Timestamp;
     aiResult     : Composition of one AIResults on aiResult.document = $self;
@@ -69,20 +73,19 @@ entity Documents : cuid {
 // ─────────────────────────────────────────────────
 entity AIResults : cuid {
     document        : Association to Documents;
-    confidenceScore : String(20);
     summary         : String(5000);
-    keyTerms        : String(2000);         // JSON array stored as string
+    // rawResponse holds only the 8 sections other than tender_information (which is
+    // fully flattened onto Tenders above) — key_dates, scope_of_work,
+    // eligibility_and_qualification, security_and_financials, payment_terms,
+    // price_variation, contract_conditions, technical_bid_documents.
     rawResponse     : LargeString;          // full Python response JSON
     // pdfContent field removed — PDFs generated on demand from rawResponse, never persisted
+    // Processing-time/token analytics are no longer persisted — the Analytics screen now
+    // polls the Python service's in-memory /analytics/live endpoint in real time instead.
     processedAt     : Timestamp;
 }
 
-// ─────────────────────────────────────────────────
-// ChatHistories  (chatbot message log)
-// ─────────────────────────────────────────────────
-entity ChatHistories : cuid {
-    tender    : Association to Tenders;
-    sender    : String(10);                 // 'user' | 'bot'
-    message   : String(5000);              // inline storage — faster reads, cheaper than LOB
-    timestamp : Timestamp;
-}
+// ChatHistories entity removed — the frontend never reads persisted chat history back
+// (ChatbotPanel only ever shows the current in-memory session), so durable server-side
+// storage was pure write-only waste. Chat remains fully functional; only the DB
+// persistence side-effect is gone.

@@ -1,49 +1,15 @@
-import React, { useState } from 'react';
+import React, { useState, Suspense } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTenders } from './hooks/useTenders.js';
 import { downloadTender, deleteTender, getTenderDocuments } from './api/tenderApi.js';
-import LoginScreen from './components/LoginScreen';
-import DashboardScreen from './components/DashboardScreen';
-import DetailsScreen from './components/DetailsScreen';
-import ChatbotPanel from './components/ChatbotPanel';
 import Sidebar from './components/Sidebar';
 
-const PLACEHOLDER_META = {
-  overview:  { title: 'Overview',   crumb: 'Workspace',  icon: 'M3 3h7v7H3zm11 0h7v7h-7zM3 14h7v7H3zm11 0h7v7h-7z', desc: 'Summary dashboards and KPI tiles will appear here.' },
-  documents: { title: 'Documents',  crumb: 'Workspace',  icon: 'M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z', desc: 'Uploaded PDFs and attachments across all tenders will appear here.' },
-  analytics: { title: 'Analytics',  crumb: 'Reports',    icon: 'M18 20V10M12 20V4M6 20v-6', desc: 'Spend analysis, tender lifecycle metrics, and approval trends will appear here.' },
-  settings:  { title: 'Settings',   crumb: 'System',     icon: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z', desc: 'User preferences, integrations, and team permissions will appear here.' },
-};
-
-function PlaceholderScreen({ screen }) {
-  const m = PLACEHOLDER_META[screen] || PLACEHOLDER_META.overview;
-  return (
-    <>
-      <header className="topbar">
-        <div className="tb-title">
-          <h1 className="tb-h1">{m.title}</h1>
-          <div className="tb-crumb">
-            <span>{m.crumb}</span>
-            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
-              <polyline points="9 18 15 12 9 6"/>
-            </svg>
-            <span>{m.title}</span>
-          </div>
-        </div>
-      </header>
-      <div className="page-body">
-        <div className="panel" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '340px', gap: '16px', color: 'var(--slate)' }}>
-          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" opacity="0.4" aria-hidden="true">
-            <path d={m.icon}/>
-          </svg>
-          <div style={{ fontWeight: 600, fontSize: '15px', color: 'var(--ink)' }}>{m.title}</div>
-          <div style={{ fontSize: '13px', maxWidth: '320px', textAlign: 'center', lineHeight: 1.6 }}>{m.desc}</div>
-          <div style={{ fontSize: '11px', marginTop: '4px', letterSpacing: '0.04em', textTransform: 'uppercase', opacity: 0.5 }}>Coming soon</div>
-        </div>
-      </div>
-    </>
-  );
-}
+const LoginScreen = React.lazy(() => import('./components/LoginScreen'));
+const DashboardScreen = React.lazy(() => import('./components/DashboardScreen'));
+const DetailsScreen = React.lazy(() => import('./components/DetailsScreen'));
+const ChatbotPanel = React.lazy(() => import('./components/ChatbotPanel'));
+const PlaceholderScreen = React.lazy(() => import('./components/layout/PlaceholderScreen.jsx'));
+const AnalyticsScreen = React.lazy(() => import('./components/layout/AnalyticsScreen.jsx'));
 
 function App() {
   const [user,           setUser]           = useState('admin'); // Default local mock user
@@ -148,7 +114,7 @@ function App() {
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
-    <>
+    <Suspense fallback={<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: 'var(--slate)' }}>Loading...</div>}>
       {screen === 'login' && (
         <LoginScreen onLoginSuccess={handleLoginSuccess} />
       )}
@@ -166,34 +132,40 @@ function App() {
           />
 
           <div className="main-area">
-            {screen === 'dashboard' && (
-              <DashboardScreen
-                username={user}
-                tenders={tenders}
-                loading={loading}
-                error={error}
-                onLogout={handleLogout}
-                onShowDetails={handleShowDetails}
-                onOpenChat={handleOpenChat}
-                onPrefetchDocuments={handlePrefetchDocuments}
-                onDelete={handleDelete}
-              />
-            )}
+            <Suspense fallback={<div style={{ padding: '24px', color: 'var(--slate)' }}>Loading Screen...</div>}>
+              {screen === 'dashboard' && (
+                <DashboardScreen
+                  username={user}
+                  tenders={tenders}
+                  loading={loading}
+                  error={error}
+                  onLogout={handleLogout}
+                  onShowDetails={handleShowDetails}
+                  onOpenChat={handleOpenChat}
+                  onPrefetchDocuments={handlePrefetchDocuments}
+                  onDelete={handleDelete}
+                />
+              )}
 
-            {screen === 'details' && selectedTender && (
-              <DetailsScreen
-                tender={selectedTender}
-                initialIsEditing={isDetailsPreEditing}
-                onBack={() => setScreen('dashboard')}
-                onSaveChanges={onSaveChanges}
-                onOpenChat={() => handleOpenChat(selectedTender)}
-                onDownload={handleDownloadDetails}
-              />
-            )}
+              {screen === 'details' && selectedTender && (
+                <DetailsScreen
+                  tender={selectedTender}
+                  initialIsEditing={isDetailsPreEditing}
+                  onBack={() => setScreen('dashboard')}
+                  onSaveChanges={onSaveChanges}
+                  onOpenChat={() => handleOpenChat(selectedTender)}
+                  onDownload={handleDownloadDetails}
+                />
+              )}
 
-            {['overview', 'documents', 'analytics', 'settings'].includes(screen) && (
-              <PlaceholderScreen screen={screen} />
-            )}
+              {screen === 'analytics' && (
+                <AnalyticsScreen />
+              )}
+
+              {['overview', 'documents', 'settings'].includes(screen) && (
+                <PlaceholderScreen screen={screen} />
+              )}
+            </Suspense>
           </div>
 
           {/* Floating AI Copilot button */}
@@ -210,22 +182,23 @@ function App() {
             </button>
           )}
 
-          {/* Chatbot Drawer */}
-          <ChatbotPanel
-            isOpen={isChatOpen}
-            onClose={() => setIsChatOpen(false)}
-            tenderId={chatTenderId}
-            onUploadComplete={() => {
-                queryClient.invalidateQueries({ queryKey: ['tenders'] });
-                if (chatTenderId) {
-                  queryClient.invalidateQueries({ queryKey: ['tender', chatTenderId, 'documents'] });
-                }
-              }}
-            tenders={tenders}
-          />
+          <Suspense fallback={null}>
+            <ChatbotPanel
+              isOpen={isChatOpen}
+              onClose={() => setIsChatOpen(false)}
+              tenderId={chatTenderId}
+              onUploadComplete={() => {
+                  queryClient.invalidateQueries({ queryKey: ['tenders'] });
+                  if (chatTenderId) {
+                    queryClient.invalidateQueries({ queryKey: ['tender', chatTenderId, 'documents'] });
+                  }
+                }}
+              tenders={tenders}
+            />
+          </Suspense>
         </div>
       )}
-    </>
+    </Suspense>
   );
 }
 

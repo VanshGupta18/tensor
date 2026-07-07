@@ -7,3 +7,11 @@ requests>=2.32
 pymupdf>=1.27
 pillow>=11.0
 reportlab>=4.0
+sentence-transformers
+llama-index-core>=0.14.23
+llama-index-embeddings-huggingface>=0.7.0
+llama-index-retrievers-bm25>=0.7.1
+llama-index-vector-stores-postgres>=0.8.1
+llama-index-storage-index-store-postgres>=0.6.0
+psycopg2-binary>=2.9.12
+pgvector>=0.4.2

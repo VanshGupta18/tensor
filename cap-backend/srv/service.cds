@@ -30,10 +30,8 @@ service TenderService @(path: '/odata/v4/tender') {
     // ── AI Results ───────────────────────────────
     entity AIResults   as projection on db.AIResults;
 
-    // ── Chat History ─────────────────────────────
-    // ── Chat History ─────────────────────────────
-    @requires: 'authenticated-user'
-    entity ChatHistories as projection on db.ChatHistories;
+    // ChatHistories projection removed along with the db entity — chat is session-only,
+    // never persisted server-side (see db/schema.cds for why).
 
     // ── Unbound Actions (called as POST RPC) ──────
 
@@ -67,9 +65,9 @@ service TenderService @(path: '/odata/v4/tender') {
     action processFile(
         tenderId : String,
         filename : String,
-        content  : LargeBinary,
+        filepath : String,
         mimeType : String
-    ) returns String;   // JSON: { confidenceScore, summary, keyTerms }
+    ) returns String;   // JSON: { results: [...] } — see processFile handler in service.js
 
     /**
      * Apply a pending duplicate-tender update after user confirmation.

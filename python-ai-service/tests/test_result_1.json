@@ -1,0 +1,296 @@
+{
+  "tenders": [
+    {
+      "price_variation": {
+        "composite_formula": "Price adjustment provisions apply as per Appendix 2 of Form 5 - detailed calculations required for each material",
+        "firm_components": [],
+        "is_applicable": true,
+        "materials": [
+          {
+            "formula": "Price as on 30 days prior to bid opening vs Price as on XX days prior to shipment",
+            "index_source": "As per bidder specification in Form 16 - source of labor and material indices to be indicated by bidders",
+            "name": "Construction Materials (General)"
+          },
+          {
+            "formula": "Adjustable price provisions for labor cost elements",
+            "index_source": "Bidders required to indicate source of labor indices",
+            "name": "Labor"
+          },
+          {
+            "formula": "Adjustable price provisions for material cost elements",
+            "index_source": "Bidders required to indicate source of material indices",
+            "name": "Material"
+          },
+          {
+            "formula": "Adjustable price provisions for transport cost elements",
+            "index_source": "Bidders required to indicate source of transport indices",
+            "name": "Transport"
+          },
+          {
+            "formula": "Adjustable price provisions for contractor/bidder equipment cost elements",
+            "index_source": "Bidders required to indicate source of equipment indices",
+            "name": "Contractor Equipment"
+          }
+        ],
+        "variable_components": [
+          "Labor",
+          "Material",
+          "Transport",
+          "Contractor/Bidder's Equipment"
+        ]
+      },
+      "tender_overview": {
+        "bid_system": null,
+        "budget_category": null,
+        "contacts": [
+          {
+            "email": null,
+            "name": null,
+            "role": null
+          }
+        ],
+        "contract_type": "Turnkey",
+        "estimated_cost": {
+          "amount": null,
+          "currency": "INR",
+          "denomination": null
+        },
+        "funding_agency": null,
+        "issuing_authority": "MGVCL",
+        "key_dates": {
+          "bid_submission_deadline": {
+            "date": null,
+            "time": null,
+            "timezone": null
+          },
+          "financial_opening": {
+            "date": null,
+            "time": null,
+            "timezone": null
+          },
+          "pre_bid_meeting": {
+            "date": null,
+            "time": null,
+            "timezone": null
+          },
+          "publication": null,
+          "technical_opening": {
+            "date": null,
+            "time": null,
+            "timezone": null
+          },
+          "work_order_issuance": null
+        },
+        "reference_no": null,
+        "tender_fee": {
+          "amount": null,
+          "currency": "INR"
+        },
+        "title": null,
+        "version": null
+      },
+      "eligibility_and_qualification": {
+        "bidding_capacity": null,
+        "contractor_class_required": "Class-I local supplier",
+        "financial": [
+          {
+            "criterion": "Net Worth",
+            "requirement": "The Net Worth of the bidder must be positive for each of the last three Financial Years. Net worth means the sum total of the paid up capital and free reserves (excluding reserves created out of revaluation) reduced by aggregate value of accumulated losses (including debit balance in profit and loss account for current year) and intangible assets."
+          },
+          {
+            "criterion": "Minimum Average Annual Turnover (MAAT)",
+            "requirement": "MAAT of the Bidder for best three years out of last five financial years should not be less than Rs. 5713.52 Lakhs (30% of the estimated cost of the project rounded off up to two decimal places)."
+          },
+          {
+            "criterion": "Liquid Assets and Credit Facilities",
+            "requirement": "Bidder must have liquid assets (LA) and/or evidence of access to or availability of fund-based credit facilities of not less than Rs 1904.50 Lakhs (10% of estimated project cost rounded off up to two decimal places). The Banker should confirm that the Credit facility is earmarked for the Works specified under Bid on receipt of the Bid. Liquid Assets include unencumbered cash (and equivalents), bank deposits with maturity less than 365 days, securities that can be freely traded or maturity less than 365 days and receivables which has general certainty of getting received minus payables which has general certainty of getting paid."
+          },
+          {
+            "criterion": "Joint Venture Requirements",
+            "requirement": "In case of Joint Venture (JV), all partners shall meet individually the qualification at para 2.2.1 (Net Worth) and collectively the requirements of para 2.2.2 & 2.2.3 (MAAT and Liquid Assets). At least one partner (lead partner) shall meet not less than 40% of the minimum criteria given at Para 2.2.2 & 2.2.3."
+          }
+        ],
+        "technical": {
+          "heading_note": "For the purpose of this particular bid, bidder shall meet the following minimum criteria in past 7 years (up to last completed financial year): Experience in similar work erecting, testing and commissioning of (11 KV & above voltage class) cabelling works either turnkey or partial turnkey in any under Public electrical utility of Central or State Govt. in India / Government Sector / Power Utility (Government or Private) / Power sector PSUs & Power Sector CPSUs / Any Private or Government power generating or transmitting company/private Developer",
+          "options": [
+            {
+              "option": "Single contract option",
+              "requirement": "Experience in similar work under single contract, costing not less than Rs. 133.31 Crore (70% of estimated project amount). Works under the contract should be completed works only."
+            },
+            {
+              "option": "Two contracts option",
+              "requirement": "Experience in similar works under two contracts, each costing not less than Rs. 76.18 Crore (40% of estimated project amount). Works under both contracts should be completed works only."
+            },
+            {
+              "option": "Three contracts option",
+              "requirement": "Experience in similar works under three contracts, each costing not less than Rs. 57.13 Crore (30% of estimated project amount). Works under all three contracts should be completed works only."
+            }
+          ],
+          "similar_works_definition": "Experience in similar work (as per clause 2.1.3) erecting, testing and commissioning of: a) EHT lines, b) HT lines, c) LT lines, d) Distribution Transformers, e) Substations. Note: Experience in only LT lines would not be considered eligible."
+        }
+      },
+      "scope_of_work": [
+        {
+          "category": "Survey and Design",
+          "details": "Field survey for deciding location of poles, distribution transformers, proposed route of 33 KV, 11KV and LT Line, proposed location of 33/11 KV sub-stations along with number, capacity of power transformers and number of 11 KV feeders. Network design based on finalized survey. Preparation of feeder wise Bill of Quantity (BOQ) for each proposed work and submission to Employer's Engineer-in-charge for approval."
+        },
+        {
+          "category": "Civil and Architectural Works",
+          "details": "All architectural and civil designs such as control room, foundation for equipment, transformer, isolators, VCB to be approved by Employer's Engineer-in-charge. Foundation work for supports, equipment foundation, gantry structure foundation, stay set with proper volume and quality of concreting as per specifications."
+        },
+        {
+          "category": "11 KV MVCC Conversion",
+          "details": "Conversion of existing bare conductor by 11 KV AAAC Covered Conductor (MVCC) and its accessories. Supply, erection, testing and commissioning of All Aluminium Alloy (AAA) type 11 KV covered conductor conforming to IS 398(Part-IV), IEC: 104-1987/IS 9997:1991 with insulation covering as per EN50397-1:2006 and accessories conforming to EN50397-2:2009."
+        },
+        {
+          "category": "Underground Cabling Works",
+          "details": "Underground networking and cabling work including supply, installation, testing and commissioning of underground cables with proper laying, jointing and termination as per technical specifications."
+        },
+        {
+          "category": "Substation Works",
+          "details": "33/11 KV sub-stations construction including supply and installation of power transformers, isolators, VCBs, protection systems. Within substation yard, all clamps and connectors used for bus-bar to be crimped and bolted type connectors for equipment connections. Distribution transformer sub stations including LT lines and service lines."
+        },
+        {
+          "category": "Steel Structure and Galvanization",
+          "details": "All Steel structure except STPs to be hot dip galvanized as per relevant Indian Standard. Supply of raw materials including steel, zinc for galvanizing, reinforcement steel and cement for foundation, coke for earthing, bolts, nuts & washers, danger plates, phase plate, number plate etc. All metallic structures & fabricated items excluding metallic supports must be galvanized."
+        },
+        {
+          "category": "Distribution Transformers",
+          "details": "Supply and installation of Distribution Transformers with Standard ratings, meeting at least Energy Efficiency Level-1 as specified in IS 1180 (Part-1):2014 and its amendments, manufactured by authorized licensee with BIS certification standard mark."
+        },
+        {
+          "category": "Quality Assurance and Testing",
+          "details": "Pre-dispatch inspections of all materials as per MQP/GTP, approved drawings, technical specifications. 100% verification of all works/materials for quality and erection works in field as per FQP/approved drawings. Factory testing, site testing, commissioning of all items & materials. Sampling from field for testing at NABL accredited laboratories."
+        },
+        {
+          "category": "Documentation and Handover",
+          "details": "Providing engineering data and drawings for review, approval and records. Preparation of project completion report/closure proposal with completion of outstanding/remedial work report. Submission of as-built drawings, operations and maintenance manuals. Handing over works to employer for commercial services. Material reconciliation and payment reconciliations."
+        },
+        {
+          "category": "GIS Tagging and Asset Management",
+          "details": "All new assets created under SI to be properly GIS tagged with mobile App (GEO URJA) provided by Employer. Collection of asset attributes and GPS coordinates for updating in existing GIS platform. Physical marking of each asset and consumer surveyed. Updating of GIS asset information mandatory for completion certificate issuance."
+        },
+        {
+          "category": "Special Requirements",
+          "details": "Engraving of 'Developed under SI' in materials including Poles, Transformers, Cables, Energy Meter etc. Installation of signboards for major infrastructures indicating work details, commissioning date, estimated cost, and scheme information. Painting of metallic supports as per specifications for overhead lines and substations."
+        },
+        {
+          "category": "Project Management",
+          "details": "Assignment of project manager with authority to make commitments and decisions. Preparation and maintenance of detailed Work Execution Plan. Active participation in resolving ROW, Forest Clearances and Railway Crossings issues. Uploading and updating project wise physical and financial progress in web portal. Submission of invoices as per SI guidelines."
+        }
+      ],
+      "financial_terms": {
+        "advance_payments": [
+          {
+            "component": "Supply of Plant Portion",
+            "conditions": [
+              "110% Bank Guarantee required",
+              "Contract Performance Securities under Contract Part I and Contract Part II must be furnished"
+            ],
+            "percentage": null
+          }
+        ],
+        "bank_details": {
+          "account": "30047792420",
+          "bank": "State Bank of India",
+          "ifsc": "SBIN0001946"
+        },
+        "bid_validity_days": 90,
+        "delayed_interest_rate": "2% higher than Prime Lending Rate of State Bank of India for Indian suppliers, 2% higher than LIBOR for foreign suppliers",
+        "emd": {
+          "form": "Bank Guarantee/DD/RTGS/NEFT/ONLINE",
+          "max_cap_inr": null,
+          "percentage": null
+        },
+        "performance_guarantees": [
+          {
+            "percentage": 3,
+            "type": "Performance Security"
+          }
+        ],
+        "progressive_payments": [
+          {
+            "component": "Running bills",
+            "milestone": "As per progress",
+            "percentage": null
+          }
+        ],
+        "retention_money_percent": null,
+        "standard_timeline_days": 28
+      },
+      "contract_and_bidding": {
+        "completion_time_months": 12,
+        "defect_liability_period_months": 12,
+        "liquidated_damages": {
+          "cap_percent": 5.0,
+          "rate_per_week_percent": 0.15
+        },
+        "quality_penalties": {
+          "critical_defect_percent": 1.0,
+          "major_defect_percent": 0.5,
+          "minor_defect_percent": 0.0
+        },
+        "special_requirements": [
+          "Volume and quality of concreting used in foundation of support, equipment foundation, gantry structure foundation, stay set etc. must be as per requirement specified in scope of work/technical specifications",
+          "If defective concreting is observed, contractor must dismantle supports/foundation and redo concreting of all supports in that section/substation at own cost",
+          "Employer reserves right to withhold payment for defective works until contractor conforms to scope of works and technical specifications",
+          "Extended Maintenance cover for Defect Liability Period required in insurance",
+          "Design Defect cover required in insurance",
+          "Performance Security shall be extended for extended defect liability period as specified in SCC",
+          "No functional guarantees applicable for equipment installed - hence Guarantee Tests not applicable",
+          "Quality Assurance Mechanism compliance required with photograph and assurance documents",
+          "Third party inspection at NABL accredited lab required for major materials",
+          "Electrical Inspector inspection and permission from State Electrical Inspectorate required after completion"
+        ],
+        "technical_bid_documents": {
+          "grouped_documents": [
+            "Letter of Bid - Technical Part as per ITB 11",
+            "Bid Security or Bid-Securing Declaration as per ITB 18",
+            "Authorization document authorizing signatory to commit the Bidder",
+            "Bidder's Eligibility documentary evidence as per ITB 16.1",
+            "Qualifications documentary evidence as per ITB 16.2 with compliance form",
+            "Eligibility of Goods/Works/Plant and Installation Services documentary evidence",
+            "Conformity: Undertaking on Compliance of terms & conditions including Scope of Services",
+            "Joint Venture Agreement (if applicable)",
+            "Joint Deed of Undertaking and Power of Attorney (for JV)",
+            "Bidder Information Sheet (Form 2)",
+            "Power of Attorney (Form 4)",
+            "Declaration of conformance to eligibility requirements (Form 5)",
+            "Details/Data for Qualification Requirements (Form 9)",
+            "Major items proposed for subcontracting (Form 10)",
+            "Statement of Deviation from RFB requirements (Form 12)",
+            "Work Completion Schedule (Form 13)",
+            "Guarantee Declaration (Form 14)",
+            "Information regarding ex-employees (Form 15)",
+            "Price Adjustment Data (Form 16)",
+            "Option for Interest bearing Initial Advance payment information (Form 17)",
+            "Declaration for tax exemptions (Form 18)",
+            "Bank Guarantee verification checklist (Form 19)",
+            "Additional Information (Form 20)",
+            "Integrity Pact duly signed (Form 21)",
+            "Self-certified copy of legal status document (Certificate of Incorporation/Partnership deed etc.)",
+            "Self-certified copy of PAN",
+            "Self-certified copy of GST Registration",
+            "Self-certified copy in support of MSME (if applicable)",
+            "Original copy of DD/Banker's cheque for Tender processing Fee (hard copy)",
+            "Original copy of Bank Guarantee against EMD (hard copy)",
+            "Original copy of JV Agreement and undertaking (hard copy)",
+            "Certified copy of MAAT, Net worth and Liquid Asset (hard copy)",
+            "Technical information and guaranteed technical particulars (GTP) & Drawings",
+            "Documents as per requirement of Section 2/Section 3 eligibility and qualification",
+            "Documents as per Section 4 (Technical Part) requirements",
+            "Documents as per Section 8 Contract forms",
+            "All documents duly signed and stamped by tenderer on each page"
+          ],
+          "has_price_disclosure_warning": true
+        }
+      }
+    }
+  ],
+  "_analytics": {
+    "input_tokens": 103447,
+    "output_tokens": 5089,
+    "cache_creation_input_tokens": 4857,
+    "cache_read_input_tokens": 4857
+  }
+}

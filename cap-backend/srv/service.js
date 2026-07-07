@@ -13,19 +13,17 @@
  */
 
 const cds = require('@sap/cds');
+const { parseDate, fmtMoney, fmtDateTime } = require('./utils/formatters');
+const { getLatestContentHash } = require('./utils/documentLookup');
 
 // ── Lazy-load axios ───────────────────────────────────────────────────────────
 let axios;
 try {
   axios = require('axios');
 } catch {
-  console.warn('[TenderService] axios not installed – Python AI calls will fail.');
+  console.warn('[TenderService] axios not installed – Python AI calls (chat, generatePDF) will fail.');
 }
-
-// Moved from inside processFile handler so it is not re-required on every call
-const FormData = require('form-data');
-
-const PYTHON_AI_URL = process.env.PYTHON_AI_URL || 'http://localhost:8000';
+const { processFileWithAI, PYTHON_AI_URL } = require('./services/aiService');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // NOTE: stream-chat express routes are registered in server.js bootstrap,
@@ -35,7 +33,7 @@ const PYTHON_AI_URL = process.env.PYTHON_AI_URL || 'http://localhost:8000';
 // ─────────────────────────────────────────────────────────────────────────────
 module.exports = cds.service.impl(async function (srv) {
 
-  const { Tenders, TenderAudits, Documents, AIResults, ChatHistories } = srv.entities;
+  const { Tenders, TenderAudits, Documents, AIResults } = srv.entities;
 
 
   // ── READ Tenders: per-user data isolation ──────────────────────────────────
@@ -107,10 +105,9 @@ module.exports = cds.service.impl(async function (srv) {
 
   // ── Action: processFile ──────────────────────────────────────────────────────
   srv.on('processFile', async (req) => {
-    const { tenderId, filename, content, mimeType } = req.data;
+    const { tenderId, filename, filepath, mimeType } = req.data;
     const uploadedAt = new Date().toISOString();
     const uploadedBy = req.user?.id || 'unknown';
-    const contentBuffer = Buffer.isBuffer(content) ? content : Buffer.from(content, 'base64');
 
     // ── Helper: apply AI-enriched fields to a Tender row ─────────────────────
     // Defined once and called for both new-tender (Branch A) and duplicate (Branch B).
@@ -123,34 +120,13 @@ module.exports = cds.service.impl(async function (srv) {
       }
     };
 
-    // 1. Forward raw bytes to Python AI service
-    let pyTenders = null;
-    let pyError = null;
+    // 1. Forward filepath to Python AI service (streams from disk)
+    const { pyTenders, pyError } = await processFileWithAI(filepath, filename, mimeType);
 
-    if (axios) {
-      try {
-        const form = new FormData();
-        form.append('invoice', contentBuffer, { filename, contentType: mimeType || 'application/octet-stream' });
-
-        const pyRes = await axios.post(`${PYTHON_AI_URL}/process_file`, form, {
-          headers: form.getHeaders(),
-          timeout: 600_000
-        });
-        pyTenders = pyRes.data?.tenders || null;
-      } catch (err) {
-        // Surface the real error — connection refused, 5xx from Python, timeout, etc.
-        if (err.code === 'ECONNREFUSED') {
-          pyError = `Python AI service is not running on ${PYTHON_AI_URL}. Start it with: cd python-ai-service && python app.py`;
-        } else if (err.code === 'ETIMEDOUT' || err.code === 'ECONNABORTED') {
-          pyError = `Python AI service timed out processing ${filename}. The file may be too large.`;
-        } else if (err.response) {
-          const body = err.response.data;
-          pyError = `Python AI error ${err.response.status}: ${typeof body === 'object' ? JSON.stringify(body) : body}`;
-        } else {
-          pyError = `Python AI error: ${err.message}`;
-        }
-        console.error('[TenderService]', pyError);
-      }
+    // Clean up temporary file from disk
+    const fs = require('fs');
+    if (filepath && fs.existsSync(filepath)) {
+      try { fs.unlinkSync(filepath); } catch (e) { console.error('Failed to clean up temp file', e); }
     }
 
     // 2. Early returns: store orphan document when AI is unavailable or found nothing
@@ -168,36 +144,7 @@ module.exports = cds.service.impl(async function (srv) {
 
     // ── Pure helpers ──────────────────────────────────────────────────────────
 
-    // Helper: parse any date string → YYYY-MM-DD (HANA DATE format), or null
-    const parseDate = (str) => {
-      if (!str) return null;
-      const s = String(str);
-      // Already YYYY-MM-DD
-      let m = s.match(/(\d{4})-(\d{2})-(\d{2})/);
-      if (m) return `${m[1]}-${m[2]}-${m[3]}`;
-      // DD/MM/YYYY or DD-MM-YYYY (most Indian/European tender formats)
-      m = s.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
-      if (m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
-      return null;
-    };
 
-    // Format AI money object → "INR 52,546.85 Lakhs"
-    const fmtMoney = (obj) => {
-      if (!obj || !obj.amount) return '';
-      const amt = Number(obj.amount).toLocaleString('en-IN', { maximumFractionDigits: 2 });
-      const den = obj.denomination && obj.denomination !== 'None' && obj.denomination !== 'null' ? ` ${obj.denomination}` : '';
-      return `${obj.currency || 'INR'} ${amt}${den}`;
-    };
-
-    // Format AI date/time object → "09/06/2026  ·  15:00 IST"
-    const fmtDateTime = (v) => {
-      if (!v) return '';
-      if (typeof v === 'string') return v;
-      const parts = [];
-      if (v.date) parts.push(v.date);
-      if (v.time) parts.push(`${v.time} ${v.timezone || v.tz || 'IST'}`);
-      return parts.join('  ·  ');
-    };
 
     // Normalize tenderNo: collapse spaces around delimiters, strip trailing version suffixes.
     // Handles AI inconsistencies like "CE-SPD/ ADB/ 2026-27/ T-13 VERSION- 2" → "CE-SPD/ADB/2026-27/T-13"
@@ -231,7 +178,7 @@ module.exports = cds.service.impl(async function (srv) {
     // 4. Batch dedup queries — two bulk queries before the loop instead of up to 2N
     //    sequential per-iteration SELECTs. Results resolved via Map in the loop below.
     const rawTenderNos = pyTenders
-      .map(t => normalizeTenderNo(t.tender_information?.reference_no || ''))
+      .map(t => normalizeTenderNo((t.tender_overview || t.tender_information)?.reference_no || ''))
       .filter(Boolean);
 
     const [existingByTenderNoRows, existingByIdRow] = await Promise.all([
@@ -249,38 +196,42 @@ module.exports = cds.service.impl(async function (srv) {
     const results = [];
 
     for (const aiTender of pyTenders) {
-      // Extract key fields using the new strict JSON schema
-      const tenderInfo = aiTender.tender_information || {};
-      const keyDates   = aiTender.key_dates || {};
+      // Extract key fields — new 6-section schema uses tender_overview (not tender_information)
+      const tenderOverview = aiTender.tender_overview || aiTender.tender_information || {};
+      const keyDates        = tenderOverview.key_dates || aiTender.key_dates || {};
 
-      const rawTenderNo         = tenderInfo.reference_no || '';
+      const rawTenderNo         = tenderOverview.reference_no || '';
       const extractedTenderNo   = normalizeTenderNo(rawTenderNo);
-      const extractedTitle      = tenderInfo.title || aiTender.summary || 'Untitled Tender';
-      const extractedBudget     = fmtMoney(tenderInfo.estimated_cost) || '';
+      const extractedTitle      = tenderOverview.title || aiTender.summary || 'Untitled Tender';
+      const extractedBudget     = fmtMoney(tenderOverview.estimated_cost) || '';
       const extractedDeadline   = parseDate(keyDates.bid_submission_deadline?.date);
       const extractedLocation   = '';  // no AI source available
 
-      // AI-enriched fields built once per iteration, reused by applyAIEnrichment
+      // AI-enriched fields — sourced from tender_overview (new) with fallback to tender_information (old).
       const aiEnrichmentSet = {
-        issuingAuthority:      tenderInfo.issuing_authority          || undefined,
-        contractType:          tenderInfo.contract_type              || undefined,
-        bidSystem:             tenderInfo.bid_system                 || undefined,
-        fundingAgency:         tenderInfo.funding_agency             || undefined,
-        tenderFee:             fmtMoney(tenderInfo.tender_fee)       || undefined,
-        budgetCategory:        tenderInfo.budget_category            || undefined,
-        publicationDate:       fmtDateTime(keyDates.publication)     || undefined,
-        preBidMeeting:         fmtDateTime(keyDates.pre_bid_meeting) || undefined,
-        bidSubmissionDeadline: fmtDateTime(keyDates.bid_submission_deadline) || undefined,
-        technicalOpening:      fmtDateTime(keyDates.technical_opening)       || undefined,
-        financialOpening:      fmtDateTime(keyDates.financial_opening)       || undefined,
-        workOrderIssuance:     fmtDateTime(keyDates.work_order_issuance)     || undefined,
+        issuingAuthority: tenderOverview.issuing_authority    || undefined,
+        contractType:     tenderOverview.contract_type        || undefined,
+        bidSystem:        tenderOverview.bid_system           || undefined,
+        fundingAgency:    tenderOverview.funding_agency       || undefined,
+        tenderFee:        fmtMoney(tenderOverview.tender_fee) || undefined,
+        budgetCategory:   tenderOverview.budget_category      || undefined,
+        contacts:         JSON.stringify(tenderOverview.contacts || []),
       };
+
+      // rawResponse keeps tender_overview (title/tender-info/key_dates/contacts, with
+      // tender_fee & estimated_cost as {amount,currency} objects) alongside the other
+      // 5 AI sections — the flattened copy on Tenders above is a display/edit
+      // convenience, but PDF regeneration and the details-screen Key Dates panel both
+      // need the original nested shape, which the flattened string columns can't
+      // losslessly reconstruct. summary/documentHash already have dedicated columns
+      // (AIResults.summary, Documents.contentHash) — no reason to duplicate those two.
+      const { tender_information: _ti, summary: _summary, documentHash: _docHash, ...remainingSections } = aiTender;
 
       const versionFromTenderNo = (() => {
         const m = rawTenderNo.match(/VERSION\s*-?\s*(\d+)/i) || rawTenderNo.match(/\bV\s*-\s*(\d+)\b/i);
         return m ? parseInt(m[1], 10) : null;
       })();
-      const extractedVersion = parseVersionStr(tenderInfo.version) || versionFromTenderNo || 1;
+      const extractedVersion = parseVersionStr(tenderOverview.version) || versionFromTenderNo || 1;
 
       // Save document ID (used in both branches)
       const docId = cds.utils.uuid();
@@ -322,15 +273,14 @@ module.exports = cds.service.impl(async function (srv) {
           }));
           await tx.run(INSERT.into(Documents).entries({
             ID: docId, tender_ID: resultTenderId, filename,
-            mimeType: mimeType || 'application/octet-stream', uploadedBy, uploadedAt
+            mimeType: mimeType || 'application/octet-stream', uploadedBy, uploadedAt,
+            contentHash: aiTender.documentHash || null,
           }));
           await tx.run(INSERT.into(AIResults).entries({
             ID:              cds.utils.uuid(),
             document_ID:     docId,
-            confidenceScore: String(aiTender.confidenceScore || 'high'),
             summary:         aiTender.summary || '',
-            keyTerms:        JSON.stringify(aiTender.keyTerms || []),
-            rawResponse:     JSON.stringify(aiTender),
+            rawResponse:     JSON.stringify(remainingSections),
             processedAt:     new Date().toISOString(),
           }));
         });
@@ -366,20 +316,37 @@ module.exports = cds.service.impl(async function (srv) {
         // Always silently update AI-enriched fields (no user confirmation needed).
         await applyAIEnrichment(resultTenderId, aiEnrichmentSet);
 
-        // Save document and AIResult linked to the existing tender
-        await INSERT.into(Documents).entries({
-          ID: docId, tender_ID: resultTenderId, filename,
-          mimeType: mimeType || 'application/octet-stream', uploadedBy, uploadedAt
-        });
-        await INSERT.into(AIResults).entries({
-          ID:              cds.utils.uuid(),
-          document_ID:     docId,
-          confidenceScore: String(aiTender.confidenceScore || 'high'),
-          summary:         aiTender.summary || '',
-          keyTerms:        JSON.stringify(aiTender.keyTerms || []),
-          rawResponse:     JSON.stringify(aiTender),
-          processedAt:     new Date().toISOString(),
-        });
+        // Update the existing Document + AIResult in place rather than accumulating a
+        // new pair on every re-upload — re-processing the same tender shouldn't grow
+        // record count unbounded. (TenderAudits is untouched — RemarksModal expects
+        // that log to keep accumulating.)
+        const existingDoc = await SELECT.one.from(Documents).columns('ID')
+          .where({ tender_ID: resultTenderId })
+          .orderBy({ uploadedAt: 'desc' });
+
+        const docFields = {
+          filename, mimeType: mimeType || 'application/octet-stream', uploadedBy, uploadedAt,
+          contentHash: aiTender.documentHash || null,
+        };
+        const resultFields = {
+          summary:     aiTender.summary || '',
+          rawResponse: JSON.stringify(remainingSections),
+          processedAt: new Date().toISOString(),
+        };
+
+        if (existingDoc) {
+          await UPDATE(Documents).set(docFields).where({ ID: existingDoc.ID });
+          const existingResult = await SELECT.one.from(AIResults).columns('ID').where({ document_ID: existingDoc.ID });
+          if (existingResult) {
+            await UPDATE(AIResults).set(resultFields).where({ ID: existingResult.ID });
+          } else {
+            await INSERT.into(AIResults).entries({ ID: cds.utils.uuid(), document_ID: existingDoc.ID, ...resultFields });
+          }
+        } else {
+          // No prior Document for this tender (edge case) — nothing to update in place yet.
+          await INSERT.into(Documents).entries({ ID: docId, tender_ID: resultTenderId, ...docFields });
+          await INSERT.into(AIResults).entries({ ID: cds.utils.uuid(), document_ID: docId, ...resultFields });
+        }
       }
 
       const requiresConfirmation = !isNew;
@@ -459,23 +426,14 @@ module.exports = cds.service.impl(async function (srv) {
   });
 
   // ── Action: chat ──────────────────────────────────────────────────────────────
+  // Session-only — no ChatHistories persistence. The frontend never reads chat
+  // history back from the server (ChatbotPanel only shows the current in-memory
+  // session), so durably storing every message was pure write-only overhead.
   srv.on('chat', async (req) => {
     const { tenderId, message } = req.data;
-    const timestamp = new Date().toISOString();
-    const reqUser  = req.user?.id || 'user';
+    const reqUser = req.user?.id || 'user';
 
-    // 1+2. Persist user message AND call Python in parallel — don't block the AI call on a DB write.
-    // cds.db.run() returns a real Promise so Promise.all awaits the insert correctly.
-    // (Assigning INSERT.into(...).entries(...) to a variable yields a CQN builder, not a Promise.)
     let botReply = '[AI service unavailable] Your message was received.';
-
-    const userInsert = cds.db.run(INSERT.into(ChatHistories).entries({
-      ID: cds.utils.uuid(),
-      tender_ID: tenderId || null,
-      sender: 'user',
-      message,
-      timestamp
-    }));
 
     let pythonTenderRef = tenderId;
     if (tenderId) {
@@ -488,26 +446,17 @@ module.exports = cds.service.impl(async function (srv) {
         console.error('[TenderService] failed to fetch tenderNo for chat:', e.message);
       }
     }
+    const contentHash = await getLatestContentHash(tenderId);
 
-    const pyCall = axios
-      ? axios.post(`${PYTHON_AI_URL}/response`, { message, tenderId: pythonTenderRef, user: reqUser }, { timeout: 60_000 })
-          .then(r => r.data?.reply || r.data?.response || JSON.stringify(r.data))
-          .catch(err => {
-            console.error('[TenderService] Python chat error:', err.message);
-            return `[AI Error] ${err.message}. Your message was received.`;
-          })
-      : Promise.resolve(botReply);
-
-    [, botReply] = await Promise.all([userInsert, pyCall]);
-
-    // 3. Persist bot reply
-    await INSERT.into(ChatHistories).entries({
-      ID: cds.utils.uuid(),
-      tender_ID: tenderId || null,
-      sender: 'bot',
-      message: botReply,
-      timestamp: new Date().toISOString()
-    });
+    if (axios) {
+      try {
+        const r = await axios.post(`${PYTHON_AI_URL}/response`, { message, tenderId: pythonTenderRef, user: reqUser, contentHash }, { timeout: 60_000 });
+        botReply = r.data?.reply || r.data?.response || JSON.stringify(r.data);
+      } catch (err) {
+        console.error('[TenderService] Python chat error:', err.message);
+        botReply = `[AI Error] ${err.message}. Your message was received.`;
+      }
+    }
 
     return botReply;
   });
@@ -548,6 +497,30 @@ module.exports = cds.service.impl(async function (srv) {
 
     // Support both old format ({sections:[...]}) and new format ({tenders:[...]})
     const tenderDoc = parsed?.tenders?.[0] ?? parsed ?? {};
+
+    // Overlay the live, user-editable Tenders columns onto tender_overview so the
+    // PDF reflects the current edited values rather than the original AI extraction
+    // (tender_fee/estimated_cost/key_dates stay as extracted — they have no flat
+    // Tenders-column equivalent to overlay from).
+    const tenderRow = await SELECT.one.from(Tenders)
+      .columns('title', 'tenderNo', 'version', 'issuingAuthority', 'contractType', 'bidSystem', 'fundingAgency', 'budgetCategory', 'contacts')
+      .where({ ID: tenderId });
+    if (tenderRow) {
+      let contacts = [];
+      try { contacts = JSON.parse(tenderRow.contacts || '[]'); } catch { /* keep [] */ }
+      tenderDoc.tender_overview = {
+        ...(tenderDoc.tender_overview || {}),
+        title:             tenderRow.title             || tenderDoc.tender_overview?.title,
+        reference_no:      tenderRow.tenderNo           || tenderDoc.tender_overview?.reference_no,
+        version:           tenderRow.version != null ? String(tenderRow.version) : tenderDoc.tender_overview?.version,
+        issuing_authority: tenderRow.issuingAuthority   || tenderDoc.tender_overview?.issuing_authority,
+        contract_type:     tenderRow.contractType       || tenderDoc.tender_overview?.contract_type,
+        bid_system:        tenderRow.bidSystem          || tenderDoc.tender_overview?.bid_system,
+        funding_agency:    tenderRow.fundingAgency      || tenderDoc.tender_overview?.funding_agency,
+        budget_category:   tenderRow.budgetCategory     || tenderDoc.tender_overview?.budget_category,
+        contacts:          contacts.length > 0 ? contacts : tenderDoc.tender_overview?.contacts,
+      };
+    }
 
     let pdfBuffer;
     try {

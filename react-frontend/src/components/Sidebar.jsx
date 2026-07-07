@@ -44,7 +44,6 @@ export default function Sidebar({ username, tenderCount, currentScreen, isCollap
             <polyline points="14 2 14 8 20 8"/>
           </svg>
           <span className="sb-text">Tenders</span>
-          {tenderCount > 0 && <span className="sb-count">{tenderCount}</span>}
         </button>
 
         <button

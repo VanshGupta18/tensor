@@ -7,22 +7,20 @@
  * Routes registered in service.js bootstrap handlers are never called.
  *
  * Routes registered here:
- *   POST /upload          — multipart PDF upload forwarded to TenderService.processFile
- *   POST /api/stream-chat — SSE streaming chat, proxied from Python AI service
- *   POST /stream-chat     — same handler, used by Vite dev proxy (strips /api prefix)
+ *   POST /upload           — multipart PDF upload forwarded to TenderService.processFile
+ *   POST /api/stream-chat  — SSE streaming chat, proxied from Python AI service
+ *   POST /stream-chat      — same handler, used by Vite dev proxy (strips /api prefix)
+ *   GET  /api/analytics/live — live (in-memory, unpersisted) processing analytics
+ *   GET  /analytics/live     — same handler, used by Vite dev proxy (strips /api prefix)
  */
 
 const cds    = require('@sap/cds');
 const multer = require('multer');
 const rateLimit = require('express-rate-limit');
 const jwt       = require('jsonwebtoken');
-
-let axios;
-try { axios = require('axios'); } catch { /* axios unavailable — stream-chat will fail */ }
-
 const { json: parseJson } = require('express');
-
-const PYTHON_AI_URL = process.env.PYTHON_AI_URL || 'http://localhost:8000';
+const { streamChatHandler } = require('./srv/controllers/chatController');
+const { getLiveAnalyticsHandler } = require('./srv/controllers/analyticsController');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-for-dev';
 
@@ -47,9 +45,15 @@ const chatLimiter = rateLimit({
 });
 
 const upload = multer({
-  storage: multer.memoryStorage(),
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, '.tmp/uploads/'),
+    filename: (req, file, cb) => cb(null, Date.now() + '-' + file.originalname)
+  }),
   limits:  { fileSize: 50 * 1024 * 1024 },   // 50 MB
 });
+
+// In-memory job tracker for asynchronous AI processing
+const uploadJobs = new Map();
 
 // Extend server socket timeout so long AI-processing uploads don't get dropped
 cds.on('listening', ({ server }) => {
@@ -88,9 +92,7 @@ cds.on('bootstrap', (app) => {
   //   Running multer inside the handler and catching its callback error lets us return
   //   a clean JSON response for every failure path.
   app.post('/upload', uploadLimiter, (req, res) => {
-    // Run multer inside the route so we can catch MulterError and return JSON
     upload.single('invoice')(req, res, async (multerErr) => {
-      // ── Multer-level errors (file too large, wrong field name, etc.) ───────
       if (multerErr) {
         const isFileSizeError = multerErr.code === 'LIMIT_FILE_SIZE';
         const status  = isFileSizeError ? 413 : 400;
@@ -105,133 +107,68 @@ cds.on('bootstrap', (app) => {
         return res.status(400).json({ error: 'No file attached. Send the PDF as form-data field "invoice".' });
       }
 
-      try {
-        const file     = req.file;
-        const tenderId = req.body.tenderId || null;
+      const file = req.file;
+      const tenderId = req.body.tenderId || null;
+      const jobId = cds.utils.uuid();
 
-        // Convert binary buffer to base64 in-process — avoids a second HTTP hop and
-        // stays well within the 50 MB multer limit (base64 expands ~33%).
-        const base64Content = file.buffer.toString('base64');
+      // Track job status
+      uploadJobs.set(jobId, { status: 'processing', result: null, error: null });
 
-        // Dispatch to the CDS TenderService action — this is a local function call,
-        // not an HTTP request.  CAP routes it to the srv.on('processFile') handler
-        // in service.js, which then calls the Python AI service.
-        const srv = await cds.connect.to('TenderService');
+      // Return 202 Accepted immediately so frontend isn't blocked
+      res.status(202).json({ jobId, status: 'processing', message: 'File is being processed asynchronously.' });
 
-        // /upload is an Express route outside of CAP's OData stack, so it has no
-        // CAP req.user.  A Privileged context lets processFile bypass auth guards.
-        const contextUser = new cds.User.Privileged('system');
-        const result = await srv.tx({ user: contextUser }).send('processFile', {
-          tenderId,
-          filename: file.originalname,
-          content:  base64Content,
-          mimeType: file.mimetype || 'application/octet-stream',
-        });
+      // Process in the background
+      (async () => {
+        try {
+          const srv = await cds.connect.to('TenderService');
+          const contextUser = new cds.User.Privileged('system');
+          
+          // Instead of base64 content, we pass the local filepath
+          const result = await srv.tx({ user: contextUser }).send('processFile', {
+            tenderId,
+            filename: file.originalname,
+            filepath: file.path,
+            mimeType: file.mimetype || 'application/octet-stream',
+          });
 
-        res.json({ value: result });
-      } catch (err) {
-        // Log the full stack for server-side debugging; send a clean message to the client.
-        // Avoid leaking stack traces to the browser in production.
-        console.error('[/upload] processFile error:', err.stack);
-        res.status(500).json({
-          error: err.message || 'Upload processing failed',
-          // Include stack only in development so the frontend can surface it
-          ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }),
-        });
-      }
+          uploadJobs.set(jobId, { status: 'completed', result });
+        } catch (err) {
+          console.error('[/upload] processFile error:', err.stack);
+          uploadJobs.set(jobId, { status: 'failed', error: err.message || 'Upload processing failed' });
+        }
+      })();
     });
+  });
+
+  // ── GET /upload/status/:jobId ────────────────────────────────────────────────
+  // Polling endpoint for the React frontend to check on background job status
+  app.get('/upload/status/:jobId', (req, res) => {
+    const job = uploadJobs.get(req.params.jobId);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    
+    // If completed or failed, we can optionally clean up the map to prevent memory leaks
+    if (job.status === 'completed' || job.status === 'failed') {
+      setTimeout(() => uploadJobs.delete(req.params.jobId), 60000); // clear after 1 minute
+    }
+    
+    res.json(job);
   });
 
   // ── Streaming chat (/api/stream-chat + /stream-chat) ──────────────────────
   // Proxies Python SSE chunks to the browser; persists conversation in HANA.
   // Registered under both paths: Vite dev proxy strips /api (/stream-chat),
   // production (React built into CAP app/) uses /api/stream-chat directly.
-  const streamChatHandler = async (req, res) => {
-    const { message, tenderId, history } = req.body || {};
-    if (!message) return res.status(400).json({ error: 'message is required' });
 
-    if (cds.env.requires?.auth?.kind === 'xsuaa' && !req.headers.authorization) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-
-    cds.db?.run(
-      INSERT.into('TenderService.ChatHistories').entries({
-        ID: cds.utils.uuid(),
-        tender_ID: tenderId || null,
-        sender: 'user',
-        message,
-        timestamp: new Date().toISOString(),
-      })
-    ).catch(e => console.error('[stream-chat] user insert failed:', e.message));
-
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no');
-    res.flushHeaders();
-
-    let fullReply = '';
-    let pythonTenderRef = tenderId;
-
-    if (tenderId && cds.db) {
-      try {
-        const t = await cds.db.read('TenderService.Tenders').columns('tenderNo').where({ ID: tenderId });
-        if (t && t.length > 0 && t[0].tenderNo) {
-          pythonTenderRef = t[0].tenderNo;
-        }
-      } catch (e) {
-        console.error('[stream-chat] failed to fetch tenderNo:', e.message);
-      }
-    }
-
-    try {
-      const pyRes = await axios.post(
-        `${PYTHON_AI_URL}/stream-response`,
-        { message, tenderId: pythonTenderRef, history: Array.isArray(history) ? history : [] },
-        { responseType: 'stream', timeout: 62_000 }
-      );
-
-      pyRes.data.on('data', (chunk) => {
-        const raw = chunk.toString();
-        res.write(raw);
-        for (const line of raw.split('\n')) {
-          if (line.startsWith('data: ') && line !== 'data: [DONE]') {
-            try { const p = JSON.parse(line.slice(6)); if (p.text) fullReply += p.text; } catch {}
-          }
-        }
-      });
-
-      pyRes.data.on('end', async () => {
-        res.end();
-        if (fullReply) {
-          cds.db?.run(
-            INSERT.into('TenderService.ChatHistories').entries({
-              ID: cds.utils.uuid(),
-              tender_ID: tenderId || null,
-              sender: 'bot',
-              message: fullReply,
-              timestamp: new Date().toISOString(),
-            })
-          ).catch(e => console.error('[stream-chat] bot insert failed:', e.message));
-        }
-      });
-
-      pyRes.data.on('error', (err) => {
-        console.error('[stream-chat] stream error:', err.message);
-        res.write(`data: ${JSON.stringify({ error: err.message })}\n\ndata: [DONE]\n\n`);
-        res.end();
-      });
-
-    } catch (err) {
-      console.error('[stream-chat] Python call failed:', err.message);
-      res.write(`data: ${JSON.stringify({ error: err.message })}\n\ndata: [DONE]\n\n`);
-      res.end();
-    }
-  };
 
   app.use(['/api/stream-chat', '/stream-chat'], chatLimiter);
   app.post('/api/stream-chat', parseJson(), streamChatHandler);
   app.post('/stream-chat', parseJson(), streamChatHandler);
+
+  // ── Live analytics (/api/analytics/live + /analytics/live) ────────────────
+  // Polled on an interval by the Analytics screen. No database read/write —
+  // straight proxy to the Python service's in-memory processing sessions.
+  app.get('/api/analytics/live', getLiveAnalyticsHandler);
+  app.get('/analytics/live', getLiveAnalyticsHandler);
 });
 
 module.exports = cds.server;

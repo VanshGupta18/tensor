@@ -17,7 +17,6 @@ dependencies = [
     "pillow>=11.0",
     "psycopg2-binary>=2.9.12",
     "pymupdf>=1.27",
-    "pypdf>=5.0",
     "python-dotenv>=1.1",
     "reportlab>=4.0",
     "requests>=2.32",

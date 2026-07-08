@@ -80,6 +80,10 @@ def validate_gstin(gstin: str | None) -> dict:
     }
 
 
+def _value(fields: dict, key: str):
+    return ((fields or {}).get(key) or {}).get("value")
+
+
 def cross_check_amounts(amount: dict) -> dict:
     """Flags an inconsistent total — e.g. the model misread one figure — by checking
     taxable_amount + tax_amount ≈ total_amount, when all three are present. Also checks
@@ -148,16 +152,22 @@ def validate_extraction(result: dict) -> dict:
     """Runs all checks and attaches a `validation` block to the raw extraction,
     plus cross-checks the PAN against the GSTIN's embedded PAN when both are present.
     Also computes a confidence score."""
-    pan_check = validate_pan(result.get("pan_number"))
-    gstin_check = validate_gstin(result.get("gst_number"))
-    amount_check = cross_check_amounts(result.get("amount") or {})
-    date_check = validate_invoice_date(result.get("invoice_date"))
-    inv_num_check = normalize_invoice_number(result.get("invoice_number"))
-    po_num_check = normalize_invoice_number(result.get("po_number"))
-    
-    bank_details = result.get("bank_details") or {}
-    acc_num_check = normalize_invoice_number(bank_details.get("account_number"))
-    ifsc_check = validate_ifsc_code(bank_details.get("ifsc_code"))
+    header = result.get("headerFields") or {}
+    line_items = result.get("lineItemFields") or []
+
+    pan_check = validate_pan(_value(header, "panNumber"))
+    gstin_check = validate_gstin(_value(header, "gstNumber"))
+    amount_check = cross_check_amounts({
+        "taxable_amount": _value(header, "netAmount"),
+        "tax_amount": _value(header, "taxAmount"),
+        "total_amount": _value(header, "grossAmount"),
+        "tax_rate": _value(header, "taxRate"),
+    })
+    date_check = validate_invoice_date(_value(header, "documentDate"))
+    doc_num_check = normalize_invoice_number(_value(header, "documentNumber"))
+    po_num_check = normalize_invoice_number(_value(header, "purchaseOrderNumber"))
+    acc_num_check = normalize_invoice_number(_value(header, "bankAccountNumber"))
+    ifsc_check = validate_ifsc_code(_value(header, "bankIfscCode"))
 
     pan_gstin_match = None
     if pan_check.get("format_valid") and gstin_check.get("format_valid"):
@@ -190,22 +200,28 @@ def validate_extraction(result: dict) -> dict:
         
     score = max(0, score)
 
+    if "vendorName" in header:
+        header["vendorName"]["value"] = (header["vendorName"].get("value") or "").strip() or None
+    if "buyerName" in header:
+        header["buyerName"]["value"] = (header["buyerName"].get("value") or "").strip() or None
+
     return {
         **result,
-        "vendor_name": (result.get("vendor_name") or "").strip() or None,
-        "buyer_name": (result.get("buyer_name") or "").strip() or None,
+        "headerFields": header,
+        "lineItemFields": line_items,
         "validation": {
             "pan": pan_check,
             "gstin": gstin_check,
             "amount_consistency": amount_check,
-            "invoice_date": date_check,
-            "invoice_number": inv_num_check,
-            "po_number": po_num_check,
+            "document_date": date_check,
+            "document_number": doc_num_check,
+            "purchase_order_number": po_num_check,
             "bank_details": {
                 "account_number": acc_num_check,
                 "ifsc_code": ifsc_check,
             },
             "pan_matches_gstin": pan_gstin_match,
-            "confidence_score": score
+            "confidence_score": score,
+            "line_item_count": len(line_items),
         },
     }

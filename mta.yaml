@@ -49,8 +49,8 @@ modules:
     path: gen/srv
     parameters:
       buildpack: nodejs_buildpack
-      memory: 512M
-      disk-quota: 512M
+      memory: 256M
+      disk-quota: 256M
     properties:
       NODE_ENV: production
       PYTHON_AI_URL: ~{tender-python-ai-api/url}
@@ -66,6 +66,8 @@ modules:
     path: gen/db
     parameters:
       buildpack: nodejs_buildpack
+      memory: 256M
+      disk-quota: 256M
     requires:
       - name: tender-hana
 

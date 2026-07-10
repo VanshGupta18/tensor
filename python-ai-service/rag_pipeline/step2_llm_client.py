@@ -102,6 +102,46 @@ def get_result(token: str, API_URL: str, payload: dict, retries: int = 3, timeou
     raise last_exc
 
 
+def build_cached_extraction_payload(
+    preamble: str,
+    group_prompt: str,
+    chunk_block: str,
+    tool_schema: dict,
+    max_tokens: int = 4096,
+) -> dict:
+    """Build the 3-block extraction payload with cache_control on the shared preamble.
+
+    Placing the preamble in a separate content block with cache_control: ephemeral
+    tells Anthropic/Bedrock to cache it after the first call. Calls 2-6, which share
+    the same preamble + tool schema, will read from the cache instead of re-tokenising
+    those ~1k tokens six times.
+    """
+    return {
+        "messages": [{
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": preamble,
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {
+                    "type": "text",
+                    "text": group_prompt,
+                },
+                {
+                    "type": "text",
+                    "text": f"DOCUMENT CHUNKS:\n{chunk_block}\n\nUse the tool to output the structured data for this group.",
+                },
+            ],
+        }],
+        "tools": [tool_schema],
+        "tool_choice": {"type": "tool", "name": "structure_document_sections"},
+        "max_tokens": 4096,
+        "anthropic_version": "bedrock-2023-05-31",
+    }
+
+
 def get_result_tool_use(token: str, API_URL: str, payload: dict, retries: int = 3, timeout: int = 600) -> tuple:
     headers = {
         "Authorization": f"Bearer {token}",

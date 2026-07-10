@@ -11,7 +11,7 @@ build-parameters:
         - npm ci --prefix react-frontend
         - npm run build --prefix react-frontend
         # 2. Run cds build — generates gen/srv (Node.js app + React static files)
-        #    and gen/db (HANA HDI artifacts)
+        #    and gen/pg (Postgres schema deploy artifacts)
         - npm ci --prefix cap-backend
         - npm run build --prefix cap-backend
 
@@ -23,8 +23,8 @@ modules:
     path: python-ai-service
     parameters:
       buildpack: python_buildpack
-      memory: 512M
-      disk-quota: 2G
+      memory: 2048M
+      disk-quota: 3G
     build-parameters:
       ignore:
         - .venv/
@@ -35,6 +35,8 @@ modules:
       - name: tender-python-ai-api
         properties:
           url: ${default-url}
+    requires:
+      - name: tender-postgres
     # NOTE: After deploying, set AI Core credentials on this CF app:
     #   cf set-env tender-python-ai TOKEN_URL      "<value>"
     #   cf set-env tender-python-ai CLIENT_ID      "<value>"
@@ -49,35 +51,36 @@ modules:
     path: gen/srv
     parameters:
       buildpack: nodejs_buildpack
-      memory: 256M
-      disk-quota: 256M
+      memory: 512M
+      disk-quota: 512M
     properties:
       NODE_ENV: production
       PYTHON_AI_URL: ~{tender-python-ai-api/url}
     requires:
-      - name: tender-hana
+      - name: tender-postgres
       - name: tender-xsuaa
       - name: tender-python-ai-api
 
-  # ── HANA DB Deployer ───────────────────────────────────────────────────────
-  # One-shot CF task that pushes schema artifacts into the HDI container.
+  # ── Postgres DB Deployer ───────────────────────────────────────────────────
+  # One-shot CF task that pushes schema artifacts into the Postgres instance.
   - name: tender-db-deployer
-    type: hdb
-    path: gen/db
+    type: nodejs
+    path: gen/pg
     parameters:
       buildpack: nodejs_buildpack
+      no-route: true
       memory: 256M
       disk-quota: 256M
     requires:
-      - name: tender-hana
+      - name: tender-postgres
 
 resources:
-  # ── SAP HANA Cloud (HDI container) ─────────────────────────────────────────
-  - name: tender-hana
-    type: com.sap.xs.hana-hdi-container
+  # ── PostgreSQL (managed service) ───────────────────────────────────────────
+  - name: tender-postgres
+    type: org.cloudfoundry.managed-service
     parameters:
-      service: hana
-      service-plan: hdi-shared
+      service: postgresql
+      service-plan: standard
 
   # ── XSUAA (OAuth2 / authentication) ───────────────────────────────────────
   - name: tender-xsuaa

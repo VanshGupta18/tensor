@@ -22,9 +22,16 @@ const { json: parseJson } = require('express');
 const { streamChatHandler } = require('./srv/controllers/chatController');
 const { getLiveAnalyticsHandler } = require('./srv/controllers/analyticsController');
 
+let axios;
+try {
+  axios = require('axios');
+} catch {
+  console.warn('[server] axios not installed – upload progress will be limited.');
+}
+
 const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-for-dev';
 
-// 10 uploads per user per 15 minutes — prevents AI cost abuse and HANA saturation
+// 10 uploads per user per 15 minutes — prevents AI cost abuse and DB saturation
 const uploadLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 10,
@@ -54,6 +61,85 @@ const upload = multer({
 
 // In-memory job tracker for asynchronous AI processing
 const uploadJobs = new Map();
+
+const EXTRACTION_GROUP_LABELS = {
+  tender_overview: 'Basic tender details',
+  scope_of_work: 'Scope of work',
+  eligibility_and_qualification: 'Eligibility criteria',
+  financial_terms: 'Financial terms',
+  price_variation: 'Price variation',
+  contract_and_bidding: 'Contract & bidding',
+};
+
+/**
+ * Derive a user-facing progress object from a Python analytics session.
+ */
+function progressFromAnalytics(session) {
+  if (!session) return null;
+  const groupsDone = session.groupsDone || 0;
+  const groupsTotal = session.groupsTotal || 6;
+  const lastGroup = session.lastGroup || null;
+  const elapsed = session.elapsedSec || 0;
+
+  let phase = 'prepare';
+  let stepIndex = 0;
+  let detail = 'Reading document…';
+
+  if (groupsDone > 0) {
+    phase = 'extract';
+    stepIndex = 3 + Math.min(groupsDone, groupsTotal);
+    detail = lastGroup
+      ? `Extracting ${EXTRACTION_GROUP_LABELS[lastGroup] || lastGroup.replace(/_/g, ' ')}`
+      : `Extracting fields (${groupsDone}/${groupsTotal})`;
+  } else if (elapsed >= 12) {
+    phase = 'search';
+    stepIndex = 2;
+    detail = 'Analyzing document…';
+  } else if (elapsed >= 4) {
+    phase = 'index';
+    stepIndex = 1;
+    detail = 'Preparing document…';
+  } else {
+    phase = 'read';
+    stepIndex = 0;
+    detail = 'Reading document…';
+  }
+
+  const basePct = 5;
+  const groupPct = Math.round((groupsDone / groupsTotal) * 75);
+  // Smooth prep ramp: 5→20 over ~30s while waiting for first extraction group
+  const prepPct = groupsDone === 0 ? Math.min(15, elapsed * 0.5) : 0;
+  // Intra-group creep: while a group is running, nudge up to ~12% of one group slot
+  const intraPct = groupsDone > 0 && groupsDone < groupsTotal
+    ? Math.min(12, (elapsed % 45) * 0.25)
+    : 0;
+
+  return {
+    phase,
+    stepIndex,
+    detail,
+    groupsDone,
+    groupsTotal,
+    lastGroup,
+    lastGroupLabel: lastGroup ? (EXTRACTION_GROUP_LABELS[lastGroup] || lastGroup) : null,
+    elapsedSec: elapsed,
+    inputTokens: session.inputTokens || 0,
+    outputTokens: session.outputTokens || 0,
+    percent: Math.min(97, basePct + prepPct + groupPct + intraPct),
+    analyticsStatus: session.status,
+  };
+}
+
+async function fetchAnalyticsSessions() {
+  if (!axios) return [];
+  try {
+    const { PYTHON_AI_URL } = require('./srv/services/aiService');
+    const pyRes = await axios.get(`${PYTHON_AI_URL}/analytics/live`, { timeout: 5_000 });
+    return pyRes.data?.sessions || [];
+  } catch {
+    return [];
+  }
+}
 
 // Extend server socket timeout so long AI-processing uploads don't get dropped
 cds.on('listening', ({ server }) => {
@@ -112,7 +198,21 @@ cds.on('bootstrap', (app) => {
       const jobId = cds.utils.uuid();
 
       // Track job status
-      uploadJobs.set(jobId, { status: 'processing', result: null, error: null });
+      uploadJobs.set(jobId, {
+        status: 'processing',
+        result: null,
+        error: null,
+        filename: file.originalname,
+        startedAt: Date.now(),
+        progress: {
+          phase: 'upload',
+          stepIndex: 0,
+          detail: 'Uploading…',
+          groupsDone: 0,
+          groupsTotal: 6,
+          percent: 2,
+        },
+      });
 
       // Return 202 Accepted immediately so frontend isn't blocked
       res.status(202).json({ jobId, status: 'processing', message: 'File is being processed asynchronously.' });
@@ -141,21 +241,52 @@ cds.on('bootstrap', (app) => {
   });
 
   // ── GET /upload/status/:jobId ────────────────────────────────────────────────
-  // Polling endpoint for the React frontend to check on background job status
-  app.get('/upload/status/:jobId', (req, res) => {
+  // Polling endpoint for the React frontend to check on background job status.
+  // Merges live Python analytics (groupsDone, tokens, elapsed) when available.
+  app.get('/upload/status/:jobId', async (req, res) => {
     const job = uploadJobs.get(req.params.jobId);
     if (!job) return res.status(404).json({ error: 'Job not found' });
-    
+
+    if (job.status === 'processing' && job.filename) {
+      const sessions = await fetchAnalyticsSessions();
+      const match = sessions.find(s => s.filename === job.filename && s.status === 'processing')
+        || sessions.find(s => s.filename === job.filename);
+      const live = progressFromAnalytics(match);
+      if (live) {
+        job.progress = live;
+      } else {
+        const elapsed = Math.round((Date.now() - (job.startedAt || Date.now())) / 1000);
+        job.progress = {
+          phase: 'upload',
+          stepIndex: 0,
+          detail: elapsed < 3 ? 'Uploading…' : 'Starting extraction…',
+          groupsDone: 0,
+          groupsTotal: 6,
+          percent: Math.min(18, 2 + elapsed * 0.55),
+          elapsedSec: elapsed,
+        };
+      }
+    } else if (job.status === 'completed') {
+      job.progress = {
+        phase: 'done',
+        stepIndex: 6,
+        detail: 'Extraction complete',
+        groupsDone: 6,
+        groupsTotal: 6,
+        percent: 100,
+      };
+    }
+
     // If completed or failed, we can optionally clean up the map to prevent memory leaks
     if (job.status === 'completed' || job.status === 'failed') {
       setTimeout(() => uploadJobs.delete(req.params.jobId), 60000); // clear after 1 minute
     }
-    
+
     res.json(job);
   });
 
   // ── Streaming chat (/api/stream-chat + /stream-chat) ──────────────────────
-  // Proxies Python SSE chunks to the browser; persists conversation in HANA.
+  // Proxies Python SSE chunks to the browser (session-only, no DB persistence).
   // Registered under both paths: Vite dev proxy strips /api (/stream-chat),
   // production (React built into CAP app/) uses /api/stream-chat directly.
 

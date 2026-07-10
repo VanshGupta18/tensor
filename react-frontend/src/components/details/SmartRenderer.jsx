@@ -2,6 +2,22 @@ import { fmtMoney, fmtDateTime } from '../../utils/formatters.js';
 
 // Bookkeeping fields that ride alongside the 6 real sections inside rawResponse
 // but were never meant to be shown to the user as tender content.
+/** Mirror of step7_pdf_generator._is_real — skip empty/placeholder sections in UI. */
+export const isSectionReal = (val) => {
+  if (val == null || val === '') return false;
+  if (typeof val === 'object' && !Array.isArray(val)) {
+    if (val._status === 'not_extracted') return false;
+    return Object.values(val).some(v => {
+      if (v == null || v === '') return false;
+      if (Array.isArray(v)) return v.length > 0;
+      if (typeof v === 'object') return Object.values(v).some(x => x != null && x !== '');
+      return true;
+    });
+  }
+  if (Array.isArray(val)) return val.length > 0;
+  return Boolean(val);
+};
+
 export const SKIP_SECTIONS = new Set([
   'error', 'warnings', 'confidence_score', 'confidenceScore', 'metadata',
   'processing_time', 'chunk_count', 'rawResponse', 'summary', 'keyTerms', 'documentHash',
@@ -47,7 +63,31 @@ export const SECTION_LABELS = {
 const isMoney    = v => v && typeof v === 'object' && 'amount' in v && 'currency' in v;
 const isDateTime = v => v && typeof v === 'object' && 'date' in v && !('amount' in v) && !('criterion' in v);
 const isDuration = v => v && typeof v === 'object' && 'duration' in v && 'unit' in v && Object.keys(v).length === 2;
-const isLiqDmg   = v => v && typeof v === 'object' && 'percentage_per_week' in v;
+const isLiqDmg   = v => v && typeof v === 'object' && (
+  'rate_per_week_percent' in v || 'percentage_per_week' in v
+);
+
+const formatLiquidatedDamages = v => {
+  const rate = v.rate_per_week_percent ?? v.percentage_per_week;
+  const cap  = v.cap_percent ?? v.max_cap_percentage;
+  const parts = [];
+  if (rate != null && rate !== '') parts.push(`${rate}% per week`);
+  if (cap != null && cap !== '') parts.push(`max ${cap}%`);
+  return parts.join(', ');
+};
+
+const formatAdvancePayment = row => {
+  let detail = row.percentage != null ? `${row.percentage}%` : '';
+  const conds = Array.isArray(row.conditions) ? row.conditions.filter(Boolean) : [];
+  if (conds.length) detail += `${detail ? '. ' : ''}Conditions: ${conds.join('; ')}`;
+  return detail || '—';
+};
+
+const formatProgressivePayment = row => {
+  let detail = row.percentage != null ? `${row.percentage}%` : '';
+  if (row.milestone) detail += `${detail ? ' — ' : ''}${row.milestone}`;
+  return detail || '—';
+};
 
 export const formatSmart = v => {
   if (v === null || v === undefined || v === '' || v === 'None' || v === 'null') return '';
@@ -61,12 +101,7 @@ export const formatSmart = v => {
     return fmtDateTime(v);
   }
   if (isDuration(v)) return v.duration ? `${v.duration} ${v.unit}` : '';
-  if (isLiqDmg(v)) {
-    const p = [];
-    if (v.percentage_per_week) p.push(`${v.percentage_per_week}/week`);
-    if (v.max_cap_percentage)  p.push(`max cap: ${v.max_cap_percentage}`);
-    return p.join(', ');
-  }
+  if (isLiqDmg(v)) return formatLiquidatedDamages(v);
   if (typeof v !== 'object') return String(v);
   return null;
 };
@@ -106,6 +141,28 @@ export const renderFieldValue = v => {
         ))}</tbody>
       </table>
     );
+    if (f && 'component' in f && 'milestone' in f) return (
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead><tr><th style={{ ...TH, width: '35%' }}>Component</th><th style={TH}>Details</th></tr></thead>
+        <tbody>{v.map((r, i) => (
+          <tr key={i} style={{ background: i % 2 ? 'var(--bg-hover,#f9fafb)' : undefined }}>
+            <td style={{ ...TD, fontWeight: 500 }}>{r.component || '—'}</td>
+            <td style={TD}>{formatProgressivePayment(r)}</td>
+          </tr>
+        ))}</tbody>
+      </table>
+    );
+    if (f && 'component' in f && 'percentage' in f && !('type' in f)) return (
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead><tr><th style={{ ...TH, width: '35%' }}>Component</th><th style={TH}>Details</th></tr></thead>
+        <tbody>{v.map((r, i) => (
+          <tr key={i} style={{ background: i % 2 ? 'var(--bg-hover,#f9fafb)' : undefined }}>
+            <td style={{ ...TD, fontWeight: 500 }}>{r.component || '—'}</td>
+            <td style={TD}>{formatAdvancePayment(r)}</td>
+          </tr>
+        ))}</tbody>
+      </table>
+    );
     if (f && 'stage' in f) return (
       <ol style={{ margin: 0, paddingLeft: 20, fontSize: '13px' }}>
         {v.map((m, i) => <li key={i} style={{ paddingBottom: 4 }}>
@@ -140,9 +197,22 @@ export const renderFieldValue = v => {
             {c.name && <div style={{ fontWeight: 600, fontSize: '13px', marginBottom: 2 }}>{c.name}</div>}
             {c.role && <div style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{c.role}</div>}
             {c.email && <div style={{ color: 'var(--primary)', fontSize: '11px', marginTop: 2 }}>{c.email}</div>}
+            {c.phone && <div style={{ color: 'var(--text-muted)', fontSize: '11px', marginTop: 2 }}>{c.phone}</div>}
           </div>
         ))}
       </div>
+    );
+    if (f && 'item' in f && 'formula' in f) return (
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead><tr><th style={{ ...TH, width: '25%' }}>Item</th><th style={{ ...TH, width: '45%' }}>Formula</th><th style={TH}>Remark</th></tr></thead>
+        <tbody>{v.map((r, i) => (
+          <tr key={i} style={{ background: i % 2 ? 'var(--bg-hover,#f9fafb)' : undefined }}>
+            <td style={{ ...TD, fontWeight: 500 }}>{r.item || r.name || '—'}</td>
+            <td style={TD}>{r.formula || '—'}</td>
+            <td style={TD}>{r.remark || r.index_source || '—'}</td>
+          </tr>
+        ))}</tbody>
+      </table>
     );
     return (
       <ul style={{ margin: 0, paddingLeft: 18, fontSize: '13px' }}>
@@ -187,6 +257,25 @@ export const renderFieldValue = v => {
 };
 
 export const renderSmartSection = (sectionKey, sectionValue) => {
+  if (sectionKey === 'price_variation') {
+    const pv = sectionValue || {};
+    const materials = pv.materials || [];
+    if (!materials.length && pv.is_applicable == null) {
+      return <div style={{ padding: 16, color: 'var(--text-muted)', fontSize: '13px', textAlign: 'center' }}>No data extracted</div>;
+    }
+    return (
+      <div style={{ padding: '4px 16px 16px' }}>
+        {pv.is_applicable != null && (
+          <div style={{ display: 'flex', gap: 12, padding: '8px 0', borderBottom: '1px solid var(--border-color,#e5e7eb)' }}>
+            <div style={{ minWidth: 180, color: 'var(--text-muted)', fontSize: 12, fontWeight: 600 }}>Is Applicable</div>
+            <div style={{ fontSize: 13 }}>{pv.is_applicable ? 'Yes' : 'No'}</div>
+          </div>
+        )}
+        {materials.length > 0 && renderFieldValue(materials)}
+      </div>
+    );
+  }
+
   if (sectionKey === 'technical_bid_documents') {
     const docs = sectionValue?.grouped_documents;
     if (!docs || (Array.isArray(docs) && docs.length === 0)) {
@@ -355,18 +444,20 @@ export const renderObjectField = (value, path, keyName, depth = 0, isEditing, ai
   }
 
   if (isLiqDmg(value)) {
+    const rateKey = 'rate_per_week_percent' in value ? 'rate_per_week_percent' : 'percentage_per_week';
+    const capKey  = 'cap_percent' in value ? 'cap_percent' : 'max_cap_percentage';
     return (
       <div key={path} style={{ marginBottom: 12 }}>
         {keyName && <div style={HEADING}>{titleLabel(keyName)}</div>}
         <div style={{ display: 'flex', gap: 10 }}>
           <div style={{ flex: 1 }}>
             <div style={SUBLABEL}>% per week</div>
-            <EditableInput path={`${path}.percentage_per_week`} value={value.percentage_per_week} aiEdits={aiEdits} setAiEdits={setAiEdits} />
+            <EditableInput path={`${path}.${rateKey}`} value={value[rateKey]} aiEdits={aiEdits} setAiEdits={setAiEdits} />
           </div>
-          {'max_cap_percentage' in value && (
+          {capKey in value && (
             <div style={{ flex: 1 }}>
               <div style={SUBLABEL}>Max cap %</div>
-              <EditableInput path={`${path}.max_cap_percentage`} value={value.max_cap_percentage} aiEdits={aiEdits} setAiEdits={setAiEdits} />
+              <EditableInput path={`${path}.${capKey}`} value={value[capKey]} aiEdits={aiEdits} setAiEdits={setAiEdits} />
             </div>
           )}
         </div>
@@ -384,6 +475,69 @@ export const renderObjectField = (value, path, keyName, depth = 0, isEditing, ai
       ) : null;
     }
     const first = value[0];
+
+    // progressive payments {component, milestone, percentage}
+    if (first && typeof first === 'object' && 'component' in first && 'milestone' in first) {
+      return (
+        <div key={path} style={{ marginBottom: 12 }}>
+          {keyName && <div style={HEADING}>{titleLabel(keyName)}</div>}
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr><th style={{ ...TH, width: '25%' }}>Component</th><th style={{ ...TH, width: '45%' }}>Milestone</th><th style={TH}>Percentage</th></tr></thead>
+            <tbody>
+              {value.map((row, i) => (
+                <tr key={i}>
+                  <td style={{ ...TD, verticalAlign: 'top' }}><EditableInput path={`${path}.${i}.component`} value={row.component} aiEdits={aiEdits} setAiEdits={setAiEdits} /></td>
+                  <td style={{ ...TD, verticalAlign: 'top' }}><EditableInput path={`${path}.${i}.milestone`} value={row.milestone} aiEdits={aiEdits} setAiEdits={setAiEdits} multiline /></td>
+                  <td style={{ ...TD, verticalAlign: 'top' }}><EditableInput path={`${path}.${i}.percentage`} value={row.percentage} aiEdits={aiEdits} setAiEdits={setAiEdits} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+    }
+
+    // advance payments {component, percentage, conditions[]}
+    if (first && typeof first === 'object' && 'component' in first && 'percentage' in first && !('type' in first)) {
+      return (
+        <div key={path} style={{ marginBottom: 12 }}>
+          {keyName && <div style={HEADING}>{titleLabel(keyName)}</div>}
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr><th style={{ ...TH, width: '25%' }}>Component</th><th style={{ ...TH, width: '15%' }}>Percentage</th><th style={TH}>Conditions</th></tr></thead>
+            <tbody>
+              {value.map((row, i) => (
+                <tr key={i}>
+                  <td style={{ ...TD, verticalAlign: 'top' }}><EditableInput path={`${path}.${i}.component`} value={row.component} aiEdits={aiEdits} setAiEdits={setAiEdits} /></td>
+                  <td style={{ ...TD, verticalAlign: 'top' }}><EditableInput path={`${path}.${i}.percentage`} value={row.percentage} aiEdits={aiEdits} setAiEdits={setAiEdits} /></td>
+                  <td style={{ ...TD, verticalAlign: 'top' }}><EditableInput path={`${path}.${i}.conditions`} value={(row.conditions || []).join('; ')} aiEdits={aiEdits} setAiEdits={setAiEdits} multiline /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+    }
+
+    // item/formula/remark (price variation materials)
+    if (first && typeof first === 'object' && 'item' in first && 'formula' in first) {
+      return (
+        <div key={path} style={{ marginBottom: 12 }}>
+          {keyName && <div style={HEADING}>{titleLabel(keyName)}</div>}
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr><th style={{ ...TH, width: '25%' }}>Item</th><th style={{ ...TH, width: '45%' }}>Formula</th><th style={TH}>Remark</th></tr></thead>
+            <tbody>
+              {value.map((row, i) => (
+                <tr key={i}>
+                  <td style={{ ...TD, verticalAlign: 'top' }}><EditableInput path={`${path}.${i}.item`} value={row.item} aiEdits={aiEdits} setAiEdits={setAiEdits} /></td>
+                  <td style={{ ...TD, verticalAlign: 'top' }}><EditableInput path={`${path}.${i}.formula`} value={row.formula} aiEdits={aiEdits} setAiEdits={setAiEdits} multiline /></td>
+                  <td style={{ ...TD, verticalAlign: 'top' }}><EditableInput path={`${path}.${i}.remark`} value={row.remark} aiEdits={aiEdits} setAiEdits={setAiEdits} multiline /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+    }
 
     // criterion/requirement or category/details → editable two-column table, same
     // shape renderFieldValue uses in view mode.
@@ -421,6 +575,7 @@ export const renderObjectField = (value, path, keyName, depth = 0, isEditing, ai
                 <EditableInput path={`${path}.${i}.name`} value={c.name} aiEdits={aiEdits} setAiEdits={setAiEdits} style={{ fontWeight: 600 }} />
                 {'role'  in c && <EditableInput path={`${path}.${i}.role`}  value={c.role}  aiEdits={aiEdits} setAiEdits={setAiEdits} />}
                 {'email' in c && <EditableInput path={`${path}.${i}.email`} value={c.email} aiEdits={aiEdits} setAiEdits={setAiEdits} />}
+                {'phone' in c && <EditableInput path={`${path}.${i}.phone`} value={c.phone} aiEdits={aiEdits} setAiEdits={setAiEdits} />}
               </div>
             ))}
           </div>

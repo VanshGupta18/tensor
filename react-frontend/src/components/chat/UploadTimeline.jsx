@@ -1,151 +1,141 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
-// ── PDF processing timeline ───────────────────────────────────────────────────
-const UPLOAD_STAGES = [
-  { label: 'Validating file', detail: 'Checking file size and hash', delay: 0 },
-  { label: 'Reading PDF', detail: 'Loading file into memory', delay: 800 },
-  { label: 'Extracting text', detail: 'Parsing document structure', delay: 2800 },
-  { label: 'Identifying tender fields', detail: 'Matching headers and metadata', delay: 6500 },
-  { label: 'Running AI analysis', detail: 'Classifying and structuring fields', delay: 13000 },
-  { label: 'Saving to database', detail: 'Persisting extracted tender data', delay: 24000 },
-];
+function truncateFilename(name, max = 36) {
+  if (!name || name.length <= max) return name;
+  const ext = name.includes('.') ? name.slice(name.lastIndexOf('.')) : '';
+  const base = name.slice(0, name.length - ext.length);
+  const keep = max - ext.length - 1;
+  return `${base.slice(0, Math.max(8, keep))}…${ext}`;
+}
 
-export default function UploadTimeline({ filename, isComplete }) {
-  const [step, setStep] = useState(0);
-  const [timestamps, setTimestamps] = useState([]);
-  const timersRef = useRef([]);
+/** Tick elapsed seconds locally — don't wait for poll intervals. */
+function useElapsedClock() {
+  const startedAt = useRef(Date.now());
+  const [seconds, setSeconds] = useState(0);
 
   useEffect(() => {
-    setTimestamps([new Date()]);
-    timersRef.current = UPLOAD_STAGES.slice(1).map((s, i) =>
-      setTimeout(() => {
-        setStep(i + 1);
-        setTimestamps(prev => {
-          const newTs = [...prev];
-          newTs[i + 1] = new Date();
-          return newTs;
-        });
-      }, s.delay)
-    );
-    return () => timersRef.current.forEach(clearTimeout);
+    const tick = () => setSeconds(Math.floor((Date.now() - startedAt.current) / 1000));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
   }, []);
+
+  return seconds;
+}
+
+/**
+ * Animate displayed % toward server target; creep slowly between polls so the
+ * bar never sits frozen, and ease to 100 on completion.
+ */
+function useSmoothPercent(serverPercent, isComplete) {
+  const [display, setDisplay] = useState(0);
+  const targetRef = useRef(0);
 
   useEffect(() => {
     if (isComplete) {
-      timersRef.current.forEach(clearTimeout);
-      setStep(UPLOAD_STAGES.length);
+      targetRef.current = 100;
+      return;
     }
+    const next = Math.max(0, serverPercent ?? 0);
+    // Server is source of truth — never regress
+    if (next > targetRef.current) targetRef.current = next;
+  }, [serverPercent, isComplete]);
+
+  useEffect(() => {
+    let raf;
+    const animate = () => {
+      setDisplay(prev => {
+        const target = isComplete ? 100 : targetRef.current;
+
+        if (isComplete) {
+          const step = (100 - prev) * 0.14;
+          return step < 0.4 ? 100 : prev + step;
+        }
+
+        if (prev < target) {
+          const step = (target - prev) * 0.07;
+          return step < 0.15 ? target : prev + step;
+        }
+
+        // Between server updates, creep toward next milestone (cap 97 until done)
+        if (prev < 97) return prev + 0.025;
+        return prev;
+      });
+      raf = requestAnimationFrame(animate);
+    };
+    raf = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(raf);
   }, [isComplete]);
 
+  return display;
+}
+
+export default function UploadTimeline({ filename, progress, isComplete }) {
+  const p = progress || {};
+  const serverPercent = isComplete ? 100 : (p.percent ?? 0);
+  const displayPercent = useSmoothPercent(serverPercent, isComplete);
+  const localElapsed = useElapsedClock();
+  const elapsed = Math.max(localElapsed, p.elapsedSec || 0);
+
+  const groupsDone = p.groupsDone || 0;
+  const groupsTotal = p.groupsTotal || 6;
+  const pctLabel = Math.min(100, Math.round(displayPercent));
+
+  const statusLine = isComplete
+    ? 'Extraction complete'
+    : (p.detail || 'Processing document…');
+
+  const sectionHint = !isComplete && groupsDone > 0
+    ? `${groupsDone}/${groupsTotal} sections`
+    : null;
+
   return (
-    <div style={{ fontSize: '13px', minWidth: '220px' }}>
-      {/* Filename header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '16px' }}>
-        <div style={{
-          width: 28, height: 28, borderRadius: '6px', flexShrink: 0,
-          background: 'color-mix(in srgb, var(--copper) 12%, transparent)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--copper)" strokeWidth="2" aria-hidden="true">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" />
-            <polyline points="14 2 14 8 20 8" />
-          </svg>
+    <div className="upload-progress">
+      <div className="upload-progress__row">
+        <div className="upload-progress__icon" aria-hidden="true">
+          {isComplete ? (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+          ) : (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" />
+              <polyline points="14 2 14 8 20 8" />
+            </svg>
+          )}
         </div>
-        <div>
-          <div style={{ fontWeight: 600, color: 'var(--ink)', lineHeight: 1.2 }}>{filename}</div>
-          <div style={{ fontSize: '11px', color: 'var(--slate)', marginTop: '1px' }}>Processing…</div>
+
+        <div className="upload-progress__body">
+          <div className="upload-progress__filename" title={filename}>
+            {truncateFilename(filename)}
+          </div>
+          <div className="upload-progress__status">
+            {statusLine}
+            <span className="upload-progress__elapsed"> · {elapsed}s</span>
+            {sectionHint && (
+              <span className="upload-progress__sections"> · {sectionHint}</span>
+            )}
+          </div>
+        </div>
+
+        <div className={`upload-progress__pct${isComplete ? ' upload-progress__pct--done' : ''}`}>
+          {pctLabel}%
         </div>
       </div>
 
-      {/* Stages */}
-      {UPLOAD_STAGES.map((s, i) => {
-        const done = i < step;
-        const active = i === step;
-        const isLast = i === UPLOAD_STAGES.length - 1;
-
-        return (
-          <div key={i} style={{ display: 'flex', gap: '12px', alignItems: 'stretch', paddingBottom: isLast ? '0' : '18px' }}>
-            {/* Track column */}
-            <div style={{ position: 'relative', width: '18px', flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-              {/* Dot */}
-              <div style={{
-                width: 18, height: 18, borderRadius: '50%', flexShrink: 0,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                background: done ? 'var(--copper)' : 'transparent',
-                border: done ? 'none' : '2px solid var(--copper)',
-                borderColor: done ? 'transparent' : active ? 'var(--copper)' : 'var(--edge)',
-                borderTopColor: active ? 'transparent' : '',
-                boxSizing: 'border-box',
-                animation: active ? 'spin 1.1s linear infinite' : 'none',
-                transition: 'background 0.25s, border-color 0.25s',
-                position: 'relative',
-                zIndex: 2,
-                marginTop: '1px',
-              }}>
-                {done && (
-                  <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
-                )}
-                {active && (
-                  <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--copper)' }} />
-                )}
-              </div>
-
-              {/* Connector */}
-              {!isLast && (
-                <div style={{
-                  position: 'absolute',
-                  top: '19px',
-                  bottom: '-1px',
-                  left: '8px',
-                  width: 2,
-                  background: done ? 'var(--copper)' : 'var(--edge-lt)',
-                  transition: 'background 0.4s',
-                  zIndex: 1,
-                }} />
-              )}
-            </div>
-
-            {/* Label column */}
-            <div style={{
-              flex: 1,
-              paddingBottom: isLast ? '0' : '4px',
-              opacity: i > step ? 0.38 : 1,
-              transition: 'opacity 0.3s',
-            }}>
-              <div style={{
-                fontWeight: active ? 600 : done ? 500 : 400,
-                color: active ? 'var(--copper)' : done ? 'var(--ink)' : 'var(--slate)',
-                lineHeight: 1.2, marginBottom: '2px',
-                transition: 'color 0.25s',
-              }}>
-                {s.label}
-              </div>
-              <div style={{
-                fontSize: '11px',
-                color: active ? 'color-mix(in srgb, var(--copper) 70%, transparent)' : 'var(--slate)',
-                transition: 'color 0.25s',
-              }}>
-                {s.detail}
-              </div>
-            </div>
-
-            {/* Time column */}
-            <div style={{
-              fontSize: '10px',
-              color: 'var(--slate)',
-              opacity: done ? 0.6 : 0,
-              transition: 'opacity 0.3s',
-              paddingTop: '2px',
-              whiteSpace: 'nowrap',
-              fontVariantNumeric: 'tabular-nums',
-            }}>
-              {timestamps[i] ? timestamps[i].toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' }) : ''}
-            </div>
-          </div>
-        );
-      })}
+      <div
+        className="upload-progress__bar-track"
+        role="progressbar"
+        aria-valuenow={pctLabel}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label={statusLine}
+      >
+        <div
+          className={`upload-progress__bar-fill${isComplete ? ' upload-progress__bar-fill--done' : ''}`}
+          style={{ width: `${displayPercent}%` }}
+        />
+      </div>
     </div>
   );
 }

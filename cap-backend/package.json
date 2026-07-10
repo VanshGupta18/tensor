@@ -2,17 +2,13 @@
   "name": "Tensor",
   "version": "1.0.0",
   "dependencies": {
-    "@cap-js/hana": "^2",
     "@cap-js/postgres": "^2",
     "@sap/cds": "^9",
-    "@sap/xssec": "^4",
     "axios": "^1.18.0",
-    "bcryptjs": "^3.0.3",
     "express-rate-limit": "^7",
     "form-data": "^4.0.6",
     "jsonwebtoken": "^9.0.3",
-    "multer": "^2.2.0",
-    "passport": "^0.7.0"
+    "multer": "^2.2.0"
   },
   "devDependencies": {
     "@sap/cds-dk": "^9"
@@ -21,7 +17,8 @@
     "start": "cds-serve",
     "watch": "cds watch",
     "dev": "cds watch",
-    "build": "cds build --production"
+    "build": "cds build --production",
+    "deploy": "cds deploy"
   },
   "private": true,
   "cds": {
@@ -31,14 +28,15 @@
       }
     },
     "fiori": {
-      "bypass_draft": true
+      "bypass_draft": true,
+      "lean_draft": true
     },
     "requires": {
       "db": {
-        "kind": "hana-cloud",
+        "kind": "postgres",
         "pool": {
-          "min": 5,
-          "max": 50,
+          "min": 2,
+          "max": 10,
           "acquireTimeoutMillis": 30000,
           "idleTimeoutMillis": 60000,
           "evictionRunIntervalMillis": 10000
@@ -47,14 +45,16 @@
       "auth": {
         "kind": "xsuaa"
       },
-      "[production]": {
-        "auth": {
-          "kind": "xsuaa"
-        }
-      },
       "[development]": {
         "db": {
-          "kind": "postgres"
+          "kind": "postgres",
+          "credentials": {
+            "host": "localhost",
+            "port": 5433,
+            "database": "tenderflow",
+            "user": "tenderflow",
+            "password": "tenderflow"
+          }
         },
         "auth": {
           "kind": "mocked",
@@ -72,20 +72,6 @@
                 "authenticated-user"
               ]
             }
-          }
-        }
-      }
-    },
-    "[development]": {
-      "requires": {
-        "db": {
-          "kind": "postgres",
-          "credentials": {
-            "host": "localhost",
-            "port": 5433,
-            "database": "tenderflow",
-            "user": "tenderflow",
-            "password": "tenderflow"
           }
         }
       }

@@ -2,24 +2,22 @@
   "tenders": [
     {
       "tender_overview": {
-        "title": "CONVERSION OF HT O/H 11 KV OPEN LINE (55SQMM/100SQMM) TO MVCC OVERHEAD CONDUCTOR AND UNDER GROUND NETWORKING IN JURISDICTION OF MEHEMDABAD DIVISION UNDER MGVCL UNDER SI SCHEME ROBUST-III",
-        "reference_no": "MGVCL/TECH/ROBUST-III/MBAD/2026-27",
-        "issuing_authority": "MADHYA GUJARAT VIJ COMPANY LIMITED (MGVCL)",
-        "contract_type": "Full Turnkey Contract (Design, Supply and Installation)",
+        "title": "Design, Supply, and Installation of Plant",
+        "issuing_authority": "MADHYA GUJARAT VIJ COMPANY LTD.",
+        "contract_type": "Plant (Design, Supply and Installation)",
         "bid_system": "Single Stage Two-Envelope Bidding Process with e-Procurement",
         "tender_fee": {
-          "amount": 10000,
+          "amount": 11800,
           "currency": "INR"
         },
         "contacts": [
           {
-            "name": "Chief Engineer (T&O)",
-            "role": "MADHYA GUJARAT VIJ COMPANY LTD.",
+            "name": "CHIEF ENGINEER (T&O)",
+            "role": "Contact Authority",
             "email": "cetech.mgvcl@gebmail.com"
           }
         ],
         "key_dates": {
-          "publication": "21.05.2026 (20:00 hrs)",
           "pre_bid_meeting": {
             "date": "2026-06-02",
             "time": "12:00",
@@ -44,171 +42,132 @@
       },
       "scope_of_work": [
         {
-          "category": "Survey and Design",
-          "details": "Field survey for deciding location of poles, distribution transformers, proposed route of 33 KV, 11KV and LT lines, location of 33/11 KV sub-stations with transformer capacity and feeder details, locations of new distribution transformers. Preparation of feeder wise Bill of Quantity (BOQ) for each proposed work and submission to Engineer-in-charge for approval before commencement of actual work."
+          "category": "GIS Data Collection and Asset Management",
+          "details": "Collection of attributes (Data Model) for assets, GPS coordinates mapping, physical marking procedure for assets and consumers, data verification through Executive Engineer and circle SE, updating GIS asset information for completion certificate issuance using GEO URJA mobile app"
         },
         {
-          "category": "Supply of Materials and Equipment",
-          "details": "Supply, testing, packing, transportation and insurance of all materials and equipment from manufacturer's work to site including all raw materials such as steel, zinc for galvanizing, reinforcement steel, cement for foundation, coke for earthing, bolts, nuts & washers, danger plates, phase plates, number plates etc. All distribution transformers to meet Energy Efficiency Level-1 as per IS 1180 with BIS certification."
+          "category": "Plant and Installation Services",
+          "details": "Design, manufacture, procurement, quality assurance, construction, installation, civil works, pre-commissioning and delivery of Plant, installation, completion and commissioning of facilities including supervision, engineering services, labor, materials, equipment, spare parts, transportation and storage"
         },
         {
-          "category": "Civil and Structural Works",
-          "details": "All architectural and civil designs including control room, foundation for equipment, transformers, isolators, VCB to be approved by Engineer-in-charge. Volume and quality of concreting for foundation of support, equipment foundation, gantry structure foundation, stay set etc. as per specifications. All steel structures (except STPs) to be hot dip galvanized as per Indian Standard."
+          "category": "Engineering and Documentation",
+          "details": "Providing engineering data and drawings for review, approval and records, preparation of project completion report/closure proposal, handing over works to employer for commercial services"
         },
         {
-          "category": "Installation and Erection",
-          "details": "Receipt, storage, insurance, preservation and conservation of equipment at site. Fabrication, pre-assembly (if any), erection, testing and putting into satisfactory operation of all equipment/materials. Within substation yard, all clamps and connectors for bus-bar to be crimped, and equipment connecting clamps to be bolted type."
+          "category": "Supply and Transportation",
+          "details": "Supply, testing, packing, transportation and insurance from manufacturer's work to site, receipt, storage, insurance, preservation and conservation of equipment at site"
         },
         {
-          "category": "Testing and Commissioning",
-          "details": "Site testing, commissioning of all items & materials, pre-commissioning, guarantee tests and successful commissioning. Clearance for installation once materials are accepted by turnkey contractor and employer representative. Quality checks and inspections during execution as per Manufacturing Quality Plan (MQP) and Field Quality Plan (FQP)."
+          "category": "Fabrication and Commissioning",
+          "details": "Fabrication, pre-assembly, erection, testing and putting into satisfactory operation of all equipment/materials including successful commissioning, warranty period services"
         },
         {
-          "category": "Project Management and Documentation",
-          "details": "Project manager assignment with authority to make commitments and decisions. Preparation and maintenance of project detailed Work Execution Plan, manpower deployment plan, progress monitoring and reporting. Providing engineering data and drawings for review, approval and records. Preparation of project completion report and handing over works to employer."
+          "category": "Materials and Components Supply",
+          "details": "Supply of raw materials including steel, zinc for galvanizing, reinforcement steel, cement for foundation, coke for earthing, bolts, nuts, washers, danger plates, phase plates, number plates for substations and structures - all steel structures except STPs to be hot dip galvanized"
         },
         {
-          "category": "Quality Assurance and Control",
-          "details": "Implementation of Quality Assurance Mechanism (QAM) with pre-dispatch inspections, 100% verification of works/materials, vendor approval process, factory inspections, witnessing acceptance tests, field inspections during implementation, and Site Observation Reports (SOR) for remedial actions."
+          "category": "Distribution Transformers",
+          "details": "Energy Efficiency Level-1 transformers as per IS 1180 (Part-1):2014 and amendments, manufactured by authorized licensee with BIS certification standard mark, mandatory engraving of 'Developed under SI' on transformers"
         },
         {
-          "category": "GIS Tagging and Asset Management",
-          "details": "Collection of asset attributes (Data Model) from utility, GPS coordinates collection to defined accuracy level, physical marking procedure for surveyed assets and consumers, GIS asset information updating as mandatory requirement for completion certificate issuance, use of mobile App (GEO URJA) for proper GIS tagging of new assets."
+          "category": "Electrical Infrastructure Development",
+          "details": "33 KV & 11 KV lines, 33/11 KV substations, distribution transformer substations, LT lines, service lines including items not specifically mentioned but required for successful installation, testing, commissioning and performance"
         },
         {
-          "category": "Compliance and Regulatory Requirements",
-          "details": "Engraving of 'Developed under SI' on materials like poles, transformers, cables, energy meters. Installation of signboards for major infrastructure showing work details, commissioning date, estimated cost, and scheme information. Compliance with statutory laws, technical specifications, and tender drawings."
+          "category": "Field Survey and Network Design",
+          "details": "Field survey for location of poles, distribution transformers, proposed route of 33 KV/11KV/LT lines, 33/11 KV substation locations, feeder wise Bill of Quantity (BOQ) preparation, mapping of existing electrical infrastructure"
         },
         {
-          "category": "Training and Handover",
-          "details": "Provision of training, operations and maintenance manuals, as-built drawings. Warranty period services and activities as mentioned in contract. Material reconciliation, payment reconciliations, and formal contract closing procedures upon completion of defect liability/guarantee period."
+          "category": "Civil and Architectural Works",
+          "details": "Architectural and civil designs for control room, foundation for equipment, transformer, isolators, VCB requiring approval from Employer's Engineer-in-charge, cement concreting for support foundations"
+        },
+        {
+          "category": "Support Structures",
+          "details": "PSC poles (8 meter long/200 KG), M.S. Beams (9m/11m/13m variants), steel tubular poles, wide parallel beams with jointing plates for different terrain requirements including rural, urban, forest and hilly areas"
+        },
+        {
+          "category": "Quality Assurance and Testing",
+          "details": "Comprehensive Quality Assurance mechanism (QAM) and Inspection Plan, pre-commissioning test checklist for 11 kV MVCC, earth resistance and insulation resistance testing, joint record maintenance"
+        },
+        {
+          "category": "Project Signage and Identification",
+          "details": "Signboards for major infrastructure showing work details, commissioning date, estimated cost, scheme information, mandatory engraving on poles, transformers, cables, energy meters"
+        },
+        {
+          "category": "Material Recovery",
+          "details": "Return of replaced old materials to area stores, proper bundling and tagging of old PVC wire with weight indication"
         }
       ],
       "eligibility_and_qualification": {
-        "contractor_class_required": "Class-I local supplier",
         "technical": {
-          "similar_works_definition": "Experience in similar work erecting, testing and commissioning of (11 KV & above voltage class) cabling works either turnkey or partial turnkey in any under Public electrical utility of Central or State Govt. in India / Government Sector / Power Utility (Government or Private) / Power sector PSUs & Power Sector CPSUs / Any Private or Government power generating or transmitting company/private Developer",
+          "similar_works_definition": "Erecting, testing and commissioning of (11 KV & above voltage class) cabelling works either turnkey or partial turnkey in any under Public electrical utility of Central or State Govt. / Government Sector / Power Utility (Government or Private) / Power sector PSUs & Power Sector CPSUs / Any Private or Government power generating or transmitting company/private Developer",
           "options": [
             {
-              "option": "Option I",
-              "requirement": "Experience in similar work under single contract, costing not less than Rs. 133.31 Crore (70% of estimated amount). The works should be completed works only."
+              "option": "Option I - Single Contract",
+              "requirement": "Experience in similar work under single contract, costing not less than Rs. 133.31 Crore (70% of estimated amount)"
             },
             {
-              "option": "Option II",
-              "requirement": "Experience in similar works under two contracts, each costing not less than Rs. 76.18 Crore (40% of estimated amount). The works should be completed works only."
+              "option": "Option II - Two Contracts",
+              "requirement": "Experience in similar works under two contracts, each costing not less than Rs. 76.18 Crore (40% of estimated amount each)"
             },
             {
-              "option": "Option III",
-              "requirement": "Experience in similar works under three contracts, each costing not less than Rs. 57.13 Crore (30% of estimated amount). The works should be completed works only."
+              "option": "Option III - Three Contracts",
+              "requirement": "Experience in similar works under three contracts, each costing not less than Rs. 57.13 Crore (30% of estimated amount each)"
             }
           ]
         },
         "financial": [
           {
             "criterion": "Net Worth",
-            "requirement": "Must be positive for each of the last three Financial Years. Net worth means sum total of paid up capital and free reserves (excluding revaluation reserves) reduced by accumulated losses and intangible assets."
+            "requirement": "Must be positive for each of the last three Financial Years (paid up capital + free reserves - accumulated losses - intangible assets)"
           },
           {
             "criterion": "Minimum Average Annual Turnover (MAAT)",
-            "requirement": "For best three years out of last five financial years should not be less than Rs. 5713.52 Lakhs (30% of estimated project cost)."
+            "requirement": "Best three years out of last five financial years should not be less than Rs. 5713.52 Lakhs (30% of estimated cost)"
           },
           {
-            "criterion": "Liquid Assets",
-            "requirement": "Must have liquid assets and/or evidence of access to fund-based credit facilities of not less than Rs 1904.50 Lakhs (10% of estimated project cost). Banker should confirm credit facility is earmarked for the Works."
-          },
-          {
-            "criterion": "Joint Venture Financial Requirements",
-            "requirement": "All JV partners shall meet net worth requirement individually. MAAT and liquid assets requirements to be met collectively by adding figures of all partners. Lead partner must meet at least 40% of MAAT and liquid assets criteria."
+            "criterion": "Liquid Assets/Credit Facilities",
+            "requirement": "Not less than Rs. 1904.50 Lakhs (10% of estimated cost) - liquid assets and/or evidence of access to fund-based credit facilities"
           }
         ]
       },
       "financial_terms": {
-        "emd": {
-          "form": "Bank Draft/Pay Order/Bank Guarantee/RTGS/NEFT/Online/DD/Banker's Cheque"
-        },
         "bank_details": {
           "bank": "State Bank of India",
           "account": "30047792420",
           "ifsc": "SBIN0001946"
-        },
-        "bid_validity_days": 90,
-        "delayed_interest_rate": "2% higher than Prime Lending Rate (Indian)/LIBOR (Foreign)",
-        "advance_payments": [
-          {
-            "component": "Supply",
-            "percentage": null,
-            "conditions": [
-              "Subject to furnishing 110% Bank Guarantee",
-              "requires Contract Performance Securities for both parts"
-            ]
-          }
-        ],
-        "progressive_payments": [
-          {
-            "component": "General",
-            "milestone": "As per Terms and Procedures of Payment appendix",
-            "percentage": null
-          }
-        ]
+        }
       },
       "price_variation": {
-        "is_applicable": true,
-        "firm_components": [
-          "Fixed Price contracts - prices are fixed during performance and not subject to variation on any account"
-        ],
-        "variable_components": [
-          "Labor",
-          "Material",
-          "Transport",
-          "Contractor's equipment"
-        ],
-        "composite_formula": "Price adjustment during performance of contract to reflect changes in cost elements such as labor, material, transport and Contractor's equipment in accordance with procedures specified in Appendix 2 of Form 5"
+        "is_applicable": false
       },
       "contract_and_bidding": {
+        "completion_time_months": 8.2,
         "defect_liability_period_months": 12,
         "liquidated_damages": {
           "rate_per_week_percent": 0.15,
           "cap_percent": 5
         },
-        "quality_penalties": {
-          "major_defect_percent": 0.5
-        },
         "special_requirements": [
-          "Volume and quality of concreting must meet specifications - non-compliance requires dismantling and redoing at contractor's cost",
-          "Extended Maintenance cover for Defect Liability Period required in insurance",
-          "Security must be valid till 180 days beyond Defect Liability Period",
-          "Minor Defects must be rectified within 30 days to avoid penalty",
-          "Third party inspection at NABL accredited lab mandatory for major materials"
+          "Volume and quality of concreting must be as per specifications - non-compliance requires dismantling and redoing at contractor's cost",
+          "Performance Security valid till 180 days beyond Defect Liability Period",
+          "Extended defect liability period for specific components as specified in SCC",
+          "Latent defects warranty period as specified in SCC after Defect Liability Period",
+          "Third party inspection at NABL accredited lab for major materials"
         ],
         "technical_bid_documents": {
           "grouped_documents": [
-            "Letter of Bid - Technical Part (Form 1)",
-            "Bidder Information Sheet (Form 2)",
-            "Bid Security or Bid-Securing Declaration (Form 3A/3B)",
-            "Power of Attorney (Form 4)",
-            "Declaration of conformance to eligibility requirements (Form 5)",
-            "Joint Venture Agreement and undertaking (if applicable)",
-            "Documentary evidence of Bidder's eligibility",
-            "Documentary evidence establishing compliance to Qualifications Requirements (Form 9)",
-            "Details of major items proposed to be subcontracted (Form 10)",
-            "Undertaking on Compliance of Terms & Conditions (Form 11)",
-            "Statement of Deviation from RFB requirements (Form 12)",
-            "Work Completion Schedule (Form 13)",
-            "Guarantee Declaration (Form 14)",
-            "Information regarding ex-employees (Form 15)",
-            "Price Adjustment Data (Form 16)",
-            "Option for Interest bearing Initial Advance payment and E-payment details (Form 17)",
-            "Declaration for tax exemptions (Form 18)",
-            "Bank Guarantee verification checklist (Form 19)",
-            "Additional Information (Form 20)",
-            "Integrity Pact (Form 21)",
-            "Self-certified copy of Certificate of Incorporation/Partnership deed",
-            "Self-certified copy of PAN",
-            "Self-certified copy of GST Registration",
-            "Self-certified copy in support of MSME (if applicable)",
-            "Original copy of DD/Banker's cheque for Tender processing Fee",
-            "Original copy of Bank Guarantee against EMD",
-            "Certified copy of MAAT, Net worth and Liquid Asset"
+            "Letter of Bid - Technical Part (ITB 11)",
+            "Bid Security or Bid-Securing Declaration (ITB 18)",
+            "Authorization document for signatory",
+            "Bidder's Eligibility documentary evidence (ITB 16.1)",
+            "Undertaking on Compliance of terms & conditions",
+            "Documentary evidence of Plant conformity (literature, drawings, data)",
+            "Statement of work methods, equipment, personnel, schedule",
+            "Original DD/Banker's cheque for Tender processing Fee (hard copy)",
+            "Original Bank Guarantee against EMD (hard copy)",
+            "Original JV Agreement and undertaking (hard copy)",
+            "Certified copy of MAAT, Net worth and Liquid Asset (hard copy)"
           ],
           "has_price_disclosure_warning": true
         }
@@ -216,11 +175,9 @@
     }
   ],
   "_analytics": {
-    "input_tokens": 111134,
-    "output_tokens": 6290,
-    "cache_creation_input_tokens": 0,
-    "cache_read_input_tokens": 0,
-    "total_chunks": 580,
-    "size_multiplier": 1.0
+    "input_tokens": 34129,
+    "output_tokens": 5947,
+    "cache_creation_input_tokens": 2004,
+    "cache_read_input_tokens": 10020
   }
 }

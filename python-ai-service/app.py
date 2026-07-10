@@ -30,7 +30,12 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 
 from rag_pipeline.step2_llm_client import get_token
-from rag_pipeline.step5_extractor import extract_via_targeted_retrieval, _upload_semaphore
+from rag_pipeline.step5_extractor import (
+    extract_via_targeted_retrieval,
+    _upload_semaphore,
+    postprocess_extraction_result,
+    EXTRACTION_PIPELINE_VERSION,
+)
 from rag_pipeline.step4_validators import validate_correctness, ensure_schema_completeness
 from rag_pipeline.step6_chat import generate_chat_response, generate_chat_response_stream
 from rag_pipeline.step7_pdf_generator import generate_tender_pdf
@@ -61,9 +66,10 @@ def health():
 
 
 # ── Live analytics (in-memory only — nothing here is persisted to a database) ───
-# The Analytics screen polls GET /analytics/live instead of reading stored HANA
-# rows, so this process's memory is the only source of truth. Capped ring buffer:
-# entries are lost on restart and old ones evicted past _MAX_SESSIONS, by design.
+# The Analytics screen polls GET /analytics/live instead of reading stored
+# rows from Postgres, so this process's memory is the only source of truth.
+# Capped ring buffer: entries are lost on restart and old ones evicted past
+# _MAX_SESSIONS, by design.
 _MAX_SESSIONS = 20
 _analytics_lock = threading.Lock()
 _analytics_sessions = OrderedDict()   # id -> session dict, insertion order = oldest first
@@ -135,7 +141,7 @@ def analytics_live():
 #          "sections":        [ ...full document sections... ]
 #        }
 #
-# CAP stores this JSON in HANA (AIResults.rawResponse) and links it
+# CAP stores this JSON in Postgres (AIResults.rawResponse) and links it
 # to the tender so Screen 2 and Screen 3 can display the extracted data.
 # ──────────────────────────────────────────────────────────────────────────────
 @app.route("/process_file", methods=["POST"])
@@ -166,11 +172,29 @@ def process_file():
     # ⚠️  NEVER set this above ~60 s in dev: the Vite proxy's socket idle timeout
     # will fire and the client receives a 502 before the response arrives.
     # For true no-delay (CI / automated tests), set CACHE_REPLAY_DELAY_SECS=0.
+    CACHE_REPLAY_DELAY_SECS = int(os.getenv("CACHE_REPLAY_DELAY_SECS", "3"))
+
     start_time = time.time()
     pdf_bytes = file.read()
     file_hash = hashlib.sha256(pdf_bytes).hexdigest()
     file.seek(0)
-    file.seek(0)
+
+    cache_path = CACHE_DIR / f"{file_hash}.json"
+    if cache_path.exists():
+        try:
+            cached_output = json.loads(cache_path.read_text())
+            if cached_output.get("_pipeline_version") != EXTRACTION_PIPELINE_VERSION:
+                raise ValueError("stale extraction pipeline version")
+            cached_output = postprocess_extraction_result(cached_output, file_hash)
+            if CACHE_REPLAY_DELAY_SECS:
+                time.sleep(CACHE_REPLAY_DELAY_SECS)
+            return jsonify(cached_output)
+        except Exception:
+            # Corrupted, stale, or pre-version cache — fall through to full pipeline
+            try:
+                cache_path.unlink(missing_ok=True)
+            except Exception:
+                pass
 
     # 1 + 2. Save uploaded PDF with a unique prefix to prevent filename collisions
     # between concurrent uploads of identically-named files. Doubles as the live
@@ -227,7 +251,13 @@ def process_file():
     analytics = final_json.get("_analytics", {})
     analytics["processingTimeSec"] = round(end_time - start_time, 2)
 
-    output = {"tenders": output_tenders, "_analytics": analytics}
+    output = {"tenders": output_tenders, "_analytics": analytics, "_pipeline_version": EXTRACTION_PIPELINE_VERSION}
+
+    # Persist result so re-upload of the same PDF returns instantly
+    try:
+        cache_path.write_text(json.dumps(output))
+    except Exception:
+        pass  # non-fatal — cache miss on next upload is acceptable
 
     return jsonify(output)
 
@@ -261,36 +291,6 @@ def generate_pdf():
         download_name="tender_synopsis.pdf",
     )
 
-
-# ── POST /response ─────────────────────────────────────────────────────────────
-# Called by CAP when the user types a plain-text message in the Chatbot.
-#
-# Flow (per TASK.txt):
-#   1. Receive { message, tenderId, user }
-#   2. Send to AI with a tender-management context prompt
-#   3. Return { reply: "<AI response text>" }
-#
-# Conversation history is persisted in HANA by CAP (ChatHistories entity).
-# This endpoint is stateless — each call is a standalone AI request.
-# ──────────────────────────────────────────────────────────────────────────────
-@app.route("/response", methods=["POST"])
-def response():
-    data      = request.get_json(force=True) or {}
-    message   = (data.get("message")  or "").strip()
-    tender_id = (data.get("tenderId") or "").strip()
-    content_hash = (data.get("contentHash") or "").strip()
-
-    if not message:
-        return jsonify({"error": "No message provided"}), 400
-    if len(message) > 10_000:
-        return jsonify({"error": "Message too long. Maximum 10,000 characters."}), 400
-
-    try:
-        reply = generate_chat_response(get_token(), API_URL, message, tender_id, content_hash=content_hash)
-    except Exception as e:
-        reply = f"AI service error: {str(e)}"
-
-    return jsonify({"reply": reply})
 
 
 # ── POST /stream-response ──────────────────────────────────────────────────────
@@ -343,10 +343,3 @@ def stream_response():
         },
     )
 
-
-# ── Entry point ────────────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
-    print(f"[AI Service] Starting on port {port}")
-    print(f"[AI Service] Endpoints: POST /process_file  |  POST /response  |  GET /health  |  GET /analytics/live")
-    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)

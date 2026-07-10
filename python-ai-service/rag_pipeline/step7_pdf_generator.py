@@ -220,6 +220,8 @@ def _section1_particulars(tender, n, styles, page_w, story):
         c_text = f"{_gv(c, 'name')} - {_gv(c, 'role')}".strip(" -")
         if c.get("email"):
             c_text += f" (Email: {c['email']})"
+        if c.get("phone"):
+            c_text += f" (Phone: {c['phone']})"
         rows.append([_p("Contact", styles["CellLabel"]), _p(c_text, styles["CellValue"])])
 
     if len(rows) > 1:
@@ -413,45 +415,29 @@ def _section6_payment_schedule(ft, n, styles, page_w, story):
 
 
 def _section7_price_variation(tender, n, styles, page_w, story):
-    """7. Price Variation / Escalation."""
+    """7. Price Variation / Escalation — single Item / Formula / Remark table."""
     pv = tender.get("price_variation") or {}
-    has_data = bool(
-        pv and (pv.get("is_applicable") or pv.get("materials") or
-                pv.get("variable_components") or pv.get("firm_components") or
-                pv.get("composite_formula"))
-    )
+    materials = pv.get("materials") or []
+    has_data = bool(pv.get("is_applicable") is not None or materials)
     if not has_data:
         return n
 
     n += 1
     _heading(story, n, "Price Variation / Escalation", styles)
 
-    summary_rows = [[_p("Item", styles["ColHeader"]), _p("Details", styles["ColHeader"])]]
-    if pv.get("variable_components"):
-        summary_rows.append([_p("Variable Components", styles["CellLabel"]),
-                              _p(", ".join(pv["variable_components"]), styles["CellValue"])])
-    if pv.get("firm_components"):
-        summary_rows.append([_p("Firm / Fixed Components", styles["CellLabel"]),
-                              _p(", ".join(pv["firm_components"]), styles["CellValue"])])
-    if pv.get("composite_formula"):
-        summary_rows.append([_p("Composite Formula", styles["CellLabel"]),
-                              _p(pv["composite_formula"], styles["CellValue"])])
-    if len(summary_rows) > 1:
-        story.extend(_kv_table(summary_rows, page_w))
-
     materials = pv.get("materials") or []
     if materials:
-        col_w = [page_w * 0.22, page_w * 0.48, page_w * 0.30]
+        col_w = [page_w * 0.25, page_w * 0.45, page_w * 0.30]
         mat_rows = [[
-            _p("Material / Item", styles["ColHeader"]),
-            _p("Formula (Summary)", styles["ColHeader"]),
-            _p("Index Source & Reference", styles["ColHeader"]),
+            _p("Item", styles["ColHeader"]),
+            _p("Formula", styles["ColHeader"]),
+            _p("Remark", styles["ColHeader"]),
         ]]
         for m in materials:
             mat_rows.append([
-                _p(m.get("name", ""),         styles["CellLabel"]),
-                _p(m.get("formula", ""),       styles["CellValue"]),
-                _p(m.get("index_source", ""),  styles["CellValue"]),
+                _p(m.get("item") or m.get("name", ""),    styles["CellLabel"]),
+                _p(m.get("formula", ""),                   styles["CellValue"]),
+                _p(m.get("remark") or m.get("index_source", ""), styles["CellValue"]),
             ])
         tbl = Table(mat_rows, colWidths=col_w, repeatRows=1)
         tbl.setStyle(TableStyle([

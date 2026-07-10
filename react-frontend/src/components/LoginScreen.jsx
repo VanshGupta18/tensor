@@ -1,8 +1,7 @@
 import React, { useState } from 'react';
-import { login, register } from '../api/authApi.js';
+import { login } from '../api/authApi.js';
 
 export default function LoginScreen({ onLoginSuccess }) {
-  const [isRegistering, setIsRegistering] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error,    setError]    = useState('');
@@ -13,13 +12,11 @@ export default function LoginScreen({ onLoginSuccess }) {
     setError('');
     setLoading(true);
     try {
-      const result = isRegistering
-        ? await register(username, password)
-        : await login(username, password);
+      const result = await login(username, password);
       if (result?.token) localStorage.setItem('token', result.token);
       onLoginSuccess(result.username || username);
     } catch (err) {
-      setError(err.message || (isRegistering ? 'Registration failed' : 'Invalid credentials'));
+      setError(err.message || 'Invalid credentials');
     } finally {
       setLoading(false);
     }
@@ -54,12 +51,8 @@ export default function LoginScreen({ onLoginSuccess }) {
 
         {/* Right — form */}
         <div className="login-right">
-          <div className="lr-title">
-            {isRegistering ? 'Create account' : 'Welcome back'}
-          </div>
-          <div className="lr-sub">
-            {isRegistering ? 'Sign up for a new account' : 'Sign in to continue'}
-          </div>
+          <div className="lr-title">Welcome back</div>
+          <div className="lr-sub">Sign in to continue</div>
 
           {error && <div className="error-msg">{error}</div>}
 
@@ -93,23 +86,9 @@ export default function LoginScreen({ onLoginSuccess }) {
               />
             </div>
             <button type="submit" className="login-submit" disabled={loading}>
-              {loading
-                ? (isRegistering ? 'Registering…' : 'Signing in…')
-                : (isRegistering ? 'Register' : 'Sign In')}
+              {loading ? 'Signing in…' : 'Sign In'}
             </button>
           </form>
-
-          <div className="login-toggle">
-            <button
-              type="button"
-              onClick={() => { setIsRegistering(!isRegistering); setError(''); }}
-              disabled={loading}
-            >
-              {isRegistering
-                ? 'Already have an account? Sign In'
-                : 'Need an account? Register'}
-            </button>
-          </div>
         </div>
 
       </div>

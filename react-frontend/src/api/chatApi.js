@@ -7,20 +7,6 @@
 import { callAction } from './client.js';
 
 /**
- * Send a text message to the AI chatbot.
- *
- * @param {string} message   - The user's question.
- * @param {string} tenderId  - Optional: context tender ID (null if global).
- * @param {string} sender    - 'user' | 'bot'
- * @returns {Promise<string>} - The bot's reply text.
- */
-export async function sendChatMessage(message, tenderId = null, sender = 'user') {
-  const result = await callAction('chat', { message, tenderId, sender });
-  // CAP wraps scalar action returns in { value: <string> }
-  return result?.value ?? result;
-}
-
-/**
  * Stream a chat message from the AI — calls /api/stream-chat and invokes
  * onChunk(text) for each arriving token. Returns the full reply when done.
  *
@@ -115,7 +101,7 @@ async function calculateFileHash(file) {
  * The caller (ChatbotPanel) shows err.message directly — do NOT wrap it in
  * another "Upload failed:" prefix here (that causes the double-prefix bug).
  */
-export async function uploadFileForProcessing(file, tenderId = null) {
+export async function uploadFileForProcessing(file, tenderId = null, onProgress = null) {
   const formData = new FormData();
   formData.append('invoice', file);           // field name must match multer config
   if (tenderId) formData.append('tenderId', tenderId);
@@ -154,7 +140,7 @@ export async function uploadFileForProcessing(file, tenderId = null) {
   // The new asynchronous backend immediately returns a 202 Accepted with a jobId
   if (response.status === 202) {
     const { jobId } = await response.json();
-    return await pollJobStatus(jobId);
+    return await pollJobStatus(jobId, onProgress);
   }
 
   // Fallback for older synchronous behavior (if still returned)
@@ -169,14 +155,17 @@ export async function uploadFileForProcessing(file, tenderId = null) {
 
 /**
  * Polls the backend for job completion status.
+ * Invokes onProgress(job) on every poll so the UI can update in real time.
  */
-async function pollJobStatus(jobId) {
+async function pollJobStatus(jobId, onProgress = null) {
+  const POLL_MS = 800;
   while (true) {
-    await new Promise(resolve => setTimeout(resolve, 3000)); // poll every 3s
     const res = await fetch(`/upload/status/${jobId}`);
     if (!res.ok) throw new Error(`Status check failed: HTTP ${res.status}`);
-    
+
     const job = await res.json();
+    if (onProgress) onProgress(job);
+
     if (job.status === 'completed') {
       const rawString = job.result?.value ?? job.result;
       try {
@@ -184,10 +173,12 @@ async function pollJobStatus(jobId) {
       } catch {
         return { results: [], message: String(rawString) };
       }
-    } else if (job.status === 'failed') {
+    }
+    if (job.status === 'failed') {
       throw new Error(job.error || 'Upload processing failed asynchronously');
     }
-    // if 'processing', loop again
+
+    await new Promise(resolve => setTimeout(resolve, POLL_MS));
   }
 }
 

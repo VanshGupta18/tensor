@@ -1,23 +1,20 @@
 import copy
-
 import json
-
 import re
-
 import threading
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from rag_pipeline.step1_schemas import _EXTRACTION_GROUPS, _DOCUMENT_SECTIONS_TOOL_SCHEMA
-
-from rag_pipeline.step4_validators import _normalize_unknowns, _deduplicate_contacts
-
-from rag_pipeline.step2_llm_client import get_result_tool_use
-
-from rag_pipeline.ingestion import ingest_pdf
-
-from rag_pipeline.retrieval import retrieve_chunks
-
+from rag_pipeline.step1_schemas import (
+    _EXTRACTION_GROUPS,
+    _DOCUMENT_SECTIONS_TOOL_SCHEMA,
+    SHARED_EXTRACTION_PREAMBLE,
+)
+from rag_pipeline.step4_validators import _normalize_unknowns, _deduplicate_contacts, _sanitize_contacts, _parse_contact_channels
+from rag_pipeline.step2_llm_client import get_result_tool_use, build_cached_extraction_payload
+from rag_pipeline.ingestion import ingest_pdf, get_document_stats, get_document_nodes
+from rag_pipeline.retrieval import retrieve_chunks, get_early_page_chunks
+from rag_pipeline.chunk_budget import compute_chunk_budget, merge_and_cap_chunks, merge_boost_early_pages
 from rag_pipeline.llama_llm_adapter import SapAiCoreLLM
 
 _upload_semaphore = threading.Semaphore(2)
@@ -96,6 +93,104 @@ def _field_value(fmap, label):
     li = fmap.get(label.strip().lower())
     return li.get("value") if li else None
 
+def _field_value_any(fmap, *labels):
+    """First non-empty value across alternate field labels (LLM label drift)."""
+    for label in labels:
+        v = _field_value(fmap, label)
+        if v and str(v).strip():
+            return str(v).strip()
+    return None
+
+_REF_NO_PATTERNS = [
+    re.compile(
+        r"(?i)(?:tender\s*number|reference\s*no\.?|nit/rfb\s*no\.?|"
+        r"rfb\s*notice/nit\s*no\.?|nit\s*no\.?|tender\s*no\.?|"
+        r"e-?tender\s*(?:id|no\.?)|bid\s*ref(?:erence)?)\s*[:\-\s]*\s*"
+        r"([^\n\r]{6,120})"
+    ),
+    re.compile(r"(?i)tender\s*id\s*[:\-\s]*\s*([^\n\r]{4,40})"),
+]
+
+_REFERENCE_LABELS_FULL = (
+    "Reference No", "Tender Number", "Tender No", "NIT/RFB No",
+    "RFB Notice/NIT No", "NIT Number", "Reference Number", "Tender Reference",
+    "NIT No",
+)
+_REFERENCE_LABELS_FALLBACK = ("Tender ID",)
+
+def _score_reference_candidate(val: str) -> tuple:
+    """Prefer org-style refs (MGVCL/TECH/...) over bare numeric e-Tender IDs."""
+    score = 0
+    if "/" in val:
+        score += 20
+    if re.search(r"[A-Za-z]", val):
+        score += 10
+    if re.search(r"\d{4}-\d{2}", val):
+        score += 5
+    if val.strip().isdigit():
+        score -= 15
+    return (score, len(val))
+
+def _clean_reference_candidate(raw: str) -> str | None:
+    if not raw:
+        return None
+    val = raw.strip().strip(".,;")
+    val = re.sub(r"\s{2,}.*$", "", val)
+    # Drop deadline/date lines accidentally captured after label
+    val = re.sub(r"(?i)\s*(deadline|issued on|date of).*$", "", val).strip()
+    if len(val) < 4 or val.lower() in {"not stated", "n/a", "tbd", "unknown"}:
+        return None
+    return val
+
+def _extract_reference_no_from_text(text: str) -> str | None:
+    candidates: list[str] = []
+    for pat in _REF_NO_PATTERNS:
+        for m in pat.finditer(text or ""):
+            cleaned = _clean_reference_candidate(m.group(1))
+            if cleaned:
+                candidates.append(cleaned)
+    if not candidates:
+        return None
+    return max(candidates, key=_score_reference_candidate)
+
+def _backfill_reference_no(tender_doc: dict, content_hash: str) -> dict:
+    """Regex fallback when LLM omits reference_no — scan first N pages of indexed text."""
+    overview = tender_doc.get("tender_overview") or {}
+    if overview.get("reference_no"):
+        return tender_doc
+
+    nodes = get_document_nodes(content_hash)
+    if not nodes:
+        return tender_doc
+
+    by_page: dict = {}
+    for node in nodes:
+        page = (node.metadata or {}).get("page")
+        if page is None or int(page) > 12:
+            continue
+        by_page.setdefault(int(page), []).append(node.get_content())
+
+    for page in sorted(by_page.keys()):
+        page_text = "\n".join(by_page[page])
+        ref = _extract_reference_no_from_text(page_text)
+        if ref:
+            tender_doc.setdefault("tender_overview", {})["reference_no"] = ref
+            print(f"[RAG] backfilled reference_no from page {page}: {ref!r}")
+            return tender_doc
+
+    return tender_doc
+
+# Bump when extraction/postprocess logic changes — stale result caches are ignored.
+EXTRACTION_PIPELINE_VERSION = 2
+
+def postprocess_extraction_result(result: dict, content_hash: str = "") -> dict:
+    """Normalize, sanitize contacts, and backfill missing reference_no on each tender."""
+    out = copy.deepcopy(result)
+    for tender in out.get("tenders", []):
+        if content_hash:
+            _backfill_reference_no(tender, content_hash)
+    return _deduplicate_contacts(_sanitize_contacts(_normalize_unknowns(out)))
+
 def _field_attrs(fmap, label):
     li = fmap.get(label.strip().lower())
     return (li.get("attributes") or {}) if li else {}
@@ -160,6 +255,147 @@ def _section_by_id(sections, sec_id):
             return s
     return None
 
+_SOW_SUBSECTION_TITLES = (
+    "scope of work",
+    "bill of quantities",
+    "boq",
+    "description of work",
+    "schedule of work",
+    "schedule of rates",
+    "technical specifications",
+)
+
+_SOW_SECTION_TITLE_HINTS = (
+    "scope of work",
+    "scope",
+    "bill of quantities",
+    "boq",
+    "description of work",
+    "schedule of work",
+    "technical specifications",
+    "name of work",
+)
+
+def _is_sow_section_title(title: str) -> bool:
+    t = (title or "").strip().lower()
+    return any(h in t for h in _SOW_SECTION_TITLE_HINTS)
+
+def _collect_scope_items(line_items):
+    """Map generic line_items from the scope group into {category, details} rows.
+
+    The LLM often deviates from the prompt's card-only shape (paragraph, bullet,
+    table_row, field) — accepting all of these prevents silent empty scope_of_work.
+    """
+    scope = []
+    for li in line_items or []:
+        t = li.get("type")
+        if t == "card":
+            cat = li.get("title") or li.get("label") or li.get("subtitle")
+            det = li.get("description") or li.get("value") or ""
+            if cat:
+                scope.append({"category": cat, "details": det})
+            elif det:
+                scope.append({"category": "Scope Item", "details": det})
+        elif t == "group":
+            cat = li.get("title") or li.get("label")
+            parts = []
+            for child in li.get("children", []) or []:
+                if not isinstance(child, dict):
+                    continue
+                label = child.get("label") or child.get("title") or ""
+                val = child.get("value") or child.get("description") or ""
+                if label and val:
+                    parts.append(f"{label}: {val}")
+                elif val:
+                    parts.append(str(val))
+                elif label:
+                    parts.append(str(label))
+            det = li.get("description") or "; ".join(parts)
+            if cat and det:
+                scope.append({"category": cat, "details": det})
+            elif cat:
+                scope.append({"category": cat, "details": ""})
+            elif parts:
+                scope.append({"category": "Scope Item", "details": "; ".join(parts)})
+        elif t == "table_row":
+            attrs = li.get("attributes") or {}
+            cat = attrs.get("category") or attrs.get("item") or attrs.get("title")
+            det = (attrs.get("details") or attrs.get("description")
+                   or attrs.get("requirement") or attrs.get("value") or "")
+            if cat:
+                scope.append({"category": cat, "details": det})
+        elif t == "field":
+            cat = li.get("label")
+            det = li.get("value") or ""
+            if cat:
+                scope.append({"category": cat, "details": det})
+        elif t == "paragraph":
+            cat = li.get("title") or li.get("label")
+            det = li.get("description") or li.get("value") or ""
+            if cat and det:
+                scope.append({"category": cat, "details": det})
+            elif det:
+                scope.append({"category": "General", "details": det})
+        elif t == "bullet":
+            title = li.get("title") or li.get("label")
+            bullets = li.get("bullets") or []
+            if title and bullets:
+                scope.append({
+                    "category": title,
+                    "details": "\n".join(f"• {b}" for b in bullets if b),
+                })
+            elif bullets:
+                for b in bullets:
+                    if b:
+                        scope.append({"category": "Scope Item", "details": b})
+        elif t == "rule" and li.get("description"):
+            scope.append({"category": "Requirement", "details": li["description"]})
+    return scope
+
+def _scope_from_section(section) -> list:
+    """Pull scope rows from a section tree — subsections, section-level items, summaries."""
+    if not section:
+        return []
+    scope = []
+    for sub in section.get("subsections", []) or []:
+        scope.extend(_collect_scope_items(sub.get("line_items")))
+        summary = (sub.get("summary") or "").strip()
+        if summary and not sub.get("line_items"):
+            scope.append({"category": sub.get("title") or "Scope", "details": summary})
+    scope.extend(_collect_scope_items(section.get("line_items")))
+    summary = (section.get("summary") or "").strip()
+    if summary and not scope:
+        scope.append({"category": section.get("title") or "Scope of Work", "details": summary})
+    return scope
+
+def _extract_scope_of_work(sections):
+    """Collect scope rows from section 2, with fallbacks for title/id drift."""
+    scope = []
+
+    sec2 = _section_by_id(sections, "2")
+    if sec2:
+        matched_subs = []
+        for sub in sec2.get("subsections", []) or []:
+            title = (sub.get("title") or "").strip().lower()
+            if any(title == t or t in title for t in _SOW_SUBSECTION_TITLES):
+                matched_subs.append(sub)
+        if matched_subs:
+            for sub in matched_subs:
+                scope.extend(_collect_scope_items(sub.get("line_items")))
+                summary = (sub.get("summary") or "").strip()
+                if summary and not sub.get("line_items"):
+                    scope.append({"category": sub.get("title") or "Scope", "details": summary})
+        else:
+            scope.extend(_scope_from_section(sec2))
+
+    if not scope:
+        for sec in sections or []:
+            if not _is_sow_section_title(sec.get("title") or ""):
+                continue
+            scope.extend(_scope_from_section(sec))
+
+    return scope
+
 def _sections_to_legacy(sections: list) -> dict:
     """Adapt the generic document tree into the legacy tender-doc dict."""
     tender = {}
@@ -172,7 +408,7 @@ def _sections_to_legacy(sections: list) -> dict:
         if ti_sub:
             fmap = _field_map(ti_sub.get("line_items"))
             for label, key in (
-                ("Title", "title"), ("Reference No", "reference_no"), ("Version", "version"),
+                ("Title", "title"), ("Version", "version"),
                 ("Issuing Authority", "issuing_authority"), ("Contract Type", "contract_type"),
                 ("Bid System", "bid_system"), ("Funding Agency", "funding_agency"),
                 ("Budget Category", "budget_category"),
@@ -180,6 +416,11 @@ def _sections_to_legacy(sections: list) -> dict:
                 v = _field_value(fmap, label)
                 if v:
                     overview[key] = v
+            ref = _field_value_any(fmap, *_REFERENCE_LABELS_FULL)
+            if not ref:
+                ref = _field_value_any(fmap, *_REFERENCE_LABELS_FALLBACK)
+            if ref:
+                overview["reference_no"] = ref
             cost = _money_field(fmap, "Estimated Cost")
             if cost:
                 overview["estimated_cost"] = cost
@@ -192,11 +433,20 @@ def _sections_to_legacy(sections: list) -> dict:
             contacts = []
             for li in contacts_sub.get("line_items", []) or []:
                 if li.get("type") == "card" and li.get("title"):
-                    contacts.append({
+                    attrs = li.get("attributes") or {}
+                    email = (li.get("description") or "").strip() or attrs.get("email")
+                    phone = attrs.get("phone")
+                    if email and not phone:
+                        parsed_email, parsed_phone = _parse_contact_channels(email)
+                        email, phone = parsed_email, parsed_phone or phone
+                    entry = {
                         "name":  li.get("title"),
                         "role":  li.get("subtitle") or None,
-                        "email": li.get("description") or None,
-                    })
+                        "email": email or None,
+                    }
+                    if phone:
+                        entry["phone"] = phone
+                    contacts.append(entry)
             if contacts:
                 overview["contacts"] = contacts
 
@@ -226,16 +476,9 @@ def _sections_to_legacy(sections: list) -> dict:
             tender["tender_overview"] = overview
 
     # ── Section 2: Scope of Work -> scope_of_work (array) ───────────────────────
-    sec2 = _section_by_id(sections, "2")
-    if sec2:
-        sow_sub = _find_subsection(sec2, "Scope of Work")
-        if sow_sub:
-            scope = []
-            for li in sow_sub.get("line_items", []) or []:
-                if li.get("type") == "card" and li.get("title"):
-                    scope.append({"category": li.get("title"), "details": li.get("description") or ""})
-            if scope:
-                tender["scope_of_work"] = scope
+    scope = _extract_scope_of_work(sections)
+    if scope:
+        tender["scope_of_work"] = scope
 
     # ── Section 3: Eligibility & Qualification ──────────────────────────────────
     sec3 = _section_by_id(sections, "3")
@@ -368,26 +611,25 @@ def _sections_to_legacy(sections: list) -> dict:
             v = _field_value(fmap, "Is Applicable")
             if v:
                 pv["is_applicable"] = v.strip().lower() in ("yes", "true", "applicable")
-            firm = _bullets_by_title(items, "Firm Components")
-            if firm:
-                pv["firm_components"] = firm
-            variable = _bullets_by_title(items, "Variable Components")
-            if variable:
-                pv["variable_components"] = variable
-            materials = []
-            for li in items:
-                if li.get("type") != "formula":
-                    continue
-                title = (li.get("title") or "").strip()
-                if title.lower() == "composite formula":
-                    if li.get("formula"):
-                        pv["composite_formula"] = li["formula"]
-                    continue
-                materials.append({
-                    "name":         title or None,
-                    "formula":      li.get("formula"),
-                    "index_source": (li.get("attributes") or {}).get("index_source") or li.get("reference"),
-                })
+
+            # Primary: table_row with item/formula/remark
+            materials = [
+                r for r in _table_rows(items, "item", "formula", "remark")
+                if r.get("item") or r.get("formula")
+            ]
+            # Fallback: legacy formula line_items
+            if not materials:
+                for li in items:
+                    if li.get("type") != "formula":
+                        continue
+                    title = (li.get("title") or "").strip()
+                    if title.lower() == "composite formula":
+                        continue
+                    materials.append({
+                        "item":    title or None,
+                        "formula": li.get("formula"),
+                        "remark":  (li.get("attributes") or {}).get("index_source") or li.get("reference"),
+                    })
             if materials:
                 pv["materials"] = materials
             if pv:
@@ -469,54 +711,73 @@ def extract_via_targeted_retrieval(token_fn, API_URL: str, pdf_path: str, conten
     # extract_and_chunk_pdf() + in-memory HybridRetriever, which was rebuilt and thrown
     # away on every request and left nothing durable for chat to ground on later.
     ingest_pdf(pdf_path, content_hash, tender_ref)
+    doc_stats = get_document_stats(content_hash)
+    page_count = doc_stats["page_count"]
+    chunk_count = doc_stats["chunk_count"]
+    print(
+        f"[RAG] document stats: {page_count} pages, {chunk_count} chunks "
+        f"({doc_stats['chunks_per_page']} chunks/page)"
+    )
 
-    main_token = token_fn() if callable(token_fn) else token_fn
+    # Keep token_fn callable so each LLM call can refresh the token on long runs
+    _token_fn = token_fn if callable(token_fn) else None
+    _static_token = token_fn() if callable(token_fn) else token_fn
     llm = SapAiCoreLLM(api_url=API_URL)
 
-    def _process_group(group):
-        print(f"[RAG] searching for group: '{group['name']}'")
+    def _fresh_token() -> str:
+        return _token_fn() if _token_fn else _static_token
 
-        # A page is roughly 3 chunks. rerank_top_n == top_k: extraction wants recall
-        # across the whole section (e.g. an exhaustive document checklist), so the
-        # reranker only reorders the candidate set here, it doesn't shrink it — unlike
-        # chat (step6_chat.py), which trims to a small, high-precision set for its
-        # tighter answer-context budget.
-        #
-        top_k = group.get("max_pages", 12) * 3
+    def _retrieve_for_group(group) -> list:
+        """Retrieval phase — runs in parallel across all groups.
 
-        # A group can cover two sub-topics (e.g. tender basics + key dates) whose
-        # keywords would otherwise be merged into one query and let the busier
-        # sub-topic crowd out the other in the ranked results. Each keyword set —
-        # primary plus any extras — gets its own retrieval pass; the results are
-        # merged (deduped) into a single prompt so this still costs exactly ONE
-        # LLM call per group, preserving the 6-call token budget.
+        Chunk budget scales with document size: small PDFs stay token-efficient,
+        large/dense PDFs automatically get more context for high-priority groups
+        (scope of work, technical bid documents).
+        """
+        max_retrieve, max_chunks = compute_chunk_budget(group, page_count, chunk_count)
         keyword_sets = [group["keywords"]] + group.get("extra_keyword_sets", [])
-        seen = set()
-        retrieved_chunks = []
-        for keywords in keyword_sets:
-            query = " ".join(keywords)
-            for chunk in retrieve_chunks(content_hash, query, llm, top_k=top_k, rerank_top_n=top_k):
-                if chunk not in seen:
-                    seen.add(chunk)
-                    retrieved_chunks.append(chunk)
 
-        if not retrieved_chunks:
+        def _retrieve(query, top_k, rerank_top_n):
+            return retrieve_chunks(content_hash, query, llm, top_k=top_k, rerank_top_n=rerank_top_n)
+
+        chunks = merge_and_cap_chunks(keyword_sets, _retrieve, max_retrieve, max_chunks)
+
+        if group.get("boost_early_pages"):
+            early = get_early_page_chunks(
+                content_hash,
+                max_page=group.get("early_page_max", 10),
+                max_chunks=group.get("early_page_slots", 8),
+            )
+            chunks = merge_boost_early_pages(
+                chunks,
+                early,
+                max_chunks,
+                min_early_slots=min(4, group.get("early_page_slots", 8)),
+            )
+
+        budget_note = "dynamic" if group.get("chunk_budget") else "fixed"
+        print(
+            f"[RAG] '{group['name']}': {len(chunks)} chunks → LLM "
+            f"(cap {max_chunks}, retrieve {max_retrieve}, {budget_note})"
+        )
+        return chunks
+
+    def _call_llm_for_group(group, chunks) -> tuple:
+        """LLM call phase — runs sequentially (1→6) to enable prompt-cache hits."""
+        if not chunks:
             print(f"[RAG] '{group['name']}': no chunks retrieved")
             return [], {}
 
-        chunk_block = "\n\n---\n".join(retrieved_chunks)
-        prompt_text = f"{group['prompt']}\n\nDOCUMENT CHUNKS:\n{chunk_block}\n\nUse the tool to output the structured data for this group."
+        chunk_block = "\n\n---\n".join(chunks)
+        payload = build_cached_extraction_payload(
+            SHARED_EXTRACTION_PREAMBLE,
+            group["prompt"],
+            chunk_block,
+            _DOCUMENT_SECTIONS_TOOL_SCHEMA,
+            max_tokens=group.get("max_output_tokens", 4096),
+        )
 
-        token = main_token
-        payload = {
-            "messages": [{"role": "user", "content": prompt_text}],
-            "tools": [_DOCUMENT_SECTIONS_TOOL_SCHEMA],
-            "tool_choice": {"type": "tool", "name": "structure_document_sections"},
-            "max_tokens": 4096,
-            "anthropic_version": "bedrock-2023-05-31",
-        }
-
-        result, usage = get_result_tool_use(token, API_URL, payload)
+        result, usage = get_result_tool_use(_fresh_token(), API_URL, payload)
         if isinstance(result, dict):
             sections = result.get("sections", [])
             if isinstance(sections, list):
@@ -536,37 +797,48 @@ def extract_via_targeted_retrieval(token_fn, API_URL: str, pdf_path: str, conten
         "input_tokens": 0,
         "output_tokens": 0,
         "cache_creation_input_tokens": 0,
-        "cache_read_input_tokens": 0
+        "cache_read_input_tokens": 0,
     }
 
-    groups_completed = 0
+    # ── Phase 1: parallel retrieval ──────────────────────────────────────────
+    retrieved_per_group: dict = {}
     with ThreadPoolExecutor(max_workers=9) as executor:
-        futures = {executor.submit(_process_group, g): g for g in _EXTRACTION_GROUPS}
+        futures = {executor.submit(_retrieve_for_group, g): g for g in _EXTRACTION_GROUPS}
         for future in as_completed(futures):
             group = futures[future]
             try:
-                group_sections, usage = future.result()
-                if usage:
-                    total_usage["input_tokens"] += usage.get("input_tokens") or 0
-                    total_usage["output_tokens"] += usage.get("output_tokens") or 0
-                    total_usage["cache_creation_input_tokens"] += usage.get("cache_creation_input_tokens") or 0
-                    total_usage["cache_read_input_tokens"] += usage.get("cache_read_input_tokens") or 0
+                retrieved_per_group[group["name"]] = future.result()
+            except Exception as exc:
+                print(f"[RAG] '{group['name']}': retrieval failed: {exc}")
+                retrieved_per_group[group["name"]] = []
 
-                if group_sections:
-                    all_sections.extend(group_sections)
-                    print(f"[RAG] '{group['name']}': Successfully populated section.")
-            except Exception as e:
-                print(f"[RAG] Error processing '{group['name']}': {e}")
-            finally:
-                groups_completed += 1
-                if on_group_done:
-                    try:
-                        on_group_done(group["name"], dict(total_usage), groups_completed)
-                    except Exception as cb_err:
-                        print(f"[RAG] on_group_done callback failed: {cb_err}")
+    # ── Phase 2: sequential LLM calls (group 1→6, enables prompt-cache reads) ─
+    groups_completed = 0
+    for group in _EXTRACTION_GROUPS:
+        chunks = retrieved_per_group.get(group["name"], [])
+        try:
+            group_sections, usage = _call_llm_for_group(group, chunks)
+            if usage:
+                total_usage["input_tokens"]               += usage.get("input_tokens") or 0
+                total_usage["output_tokens"]              += usage.get("output_tokens") or 0
+                total_usage["cache_creation_input_tokens"] += usage.get("cache_creation_input_tokens") or 0
+                total_usage["cache_read_input_tokens"]     += usage.get("cache_read_input_tokens") or 0
+
+            if group_sections:
+                all_sections.extend(group_sections)
+                print(f"[RAG] '{group['name']}': Successfully populated section.")
+        except Exception as e:
+            print(f"[RAG] Error processing '{group['name']}': {e}")
+        finally:
+            groups_completed += 1
+            if on_group_done:
+                try:
+                    on_group_done(group["name"], dict(total_usage), groups_completed)
+                except Exception as cb_err:
+                    print(f"[RAG] on_group_done callback failed: {cb_err}")
 
     all_sections.sort(key=lambda s: _num(s.get("number")) if _num(s.get("number")) is not None else 999)
     tender_doc = _sections_to_legacy(all_sections)
 
     final_json = {"tenders": [tender_doc], "_analytics": total_usage}
-    return _deduplicate_contacts(_normalize_unknowns(final_json))
+    return postprocess_extraction_result(final_json, content_hash)

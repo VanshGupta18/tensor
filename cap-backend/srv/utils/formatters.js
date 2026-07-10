@@ -1,6 +1,6 @@
 'use strict';
 
-// Helper: parse any date string → YYYY-MM-DD (HANA DATE format), or null
+// Helper: parse any date string → YYYY-MM-DD (ISO DATE format), or null
 const parseDate = (str) => {
   if (!str) return null;
   const s = String(str);

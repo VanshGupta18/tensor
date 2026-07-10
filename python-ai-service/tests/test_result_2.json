@@ -3,9 +3,9 @@
     {
       "tender_overview": {
         "title": "Development of Distribution Infrastructure & System Strengthening works at Nagpur Zone of MSEDCL, Maharashtra under Power Distribution Enhancement Program funded by Asian Development Bank (ADB)",
-        "reference_no": "CE-SPD/ADB/2026-27/T-13 (Nagpur Zone), Version-2",
+        "reference_no": "CE-SPD/ADB/2026-27/ T-13 (Nagpur Zone)",
         "version": "2",
-        "issuing_authority": "Chief Engineer (Spl. Projects), Maharashtra State Electricity Distribution Company Limited (MSEDCL)",
+        "issuing_authority": "MAHARASHTRA STATE ELECTRICITY DISTRIBUTION COMPANY LIMITED",
         "contract_type": "Turnkey",
         "bid_system": "Single Stage Two-Envelope Bidding Process with e-Procurement",
         "funding_agency": "Asian Development Bank (ADB)",
@@ -22,8 +22,13 @@
         "contacts": [
           {
             "name": "M S Gawali",
-            "role": "Executive Engineer (Distribution)",
-            "email": "cespd.msedcl@gmail.com, Mobile: 9152303162"
+            "role": "Executive Engineer(Distribution)",
+            "email": "9152303162, cespd.msedcl@gmail.com"
+          },
+          {
+            "name": "The Chief Engineer (Spl. Projects)",
+            "role": "MAHARASHTRA STATE ELECTRICITY DISTRIBUTION COMPANY LIMITED",
+            "email": "Plot no. G-9, 5th floor, Prakashgad, Anant Kanekar Marg, Bandra (East), Mumbai - 400051"
           }
         ],
         "key_dates": {
@@ -43,252 +48,77 @@
             "time": "16:00",
             "timezone": "IST"
           },
-          "financial_opening": "To be notified later"
+          "financial_opening": "Will be declared later"
         }
       },
-      "eligibility_and_qualification": {
-        "contractor_class_required": "Electrical Contractor License required - must possess license for execution of works or equivalent license from any State in India",
-        "bidding_capacity": 2,
-        "technical": {
-          "heading_note": "For the purpose of this bid, bidder shall meet minimum criteria in past 7 years up to 31/03/2026",
-          "similar_works_definition": "Construction works in electrical power sector including: 1) EHT lines 2) HT lines 3) LT lines 4) Distribution transformers 5) Substations. Experience in only LT lines would not be considered eligible",
-          "options": [
-            {
-              "option": "Option A",
-              "requirement": "Experience in similar work under single contract, costing not less than 70% of the tender cost excluding GST (completed works only)"
-            },
-            {
-              "option": "Option B",
-              "requirement": "Experience in similar works under two contracts, each costing not less than 40% of the tender cost excluding GST (completed works only)"
-            },
-            {
-              "option": "Option C",
-              "requirement": "Experience in similar works under three contracts, each costing not less than 30% of the tender cost excluding GST (completed works only)"
-            }
-          ]
+      "scope_of_work": [
+        {
+          "category": "Turnkey Execution",
+          "details": "Work executed on turnkey basis including survey, network design, supply, manufacturer's quality assurance, testing, transportation, storage, erection, including all civil/structural works, site testing, commissioning of all items & materials and all associated activities for completion and satisfactory performance of entire works"
         },
-        "financial": [
-          {
-            "criterion": "Net Worth",
-            "requirement": "Net Worth must be positive for each of the last three Financial Years. Net worth = paid-up capital + free reserves (excluding revaluation reserves) - accumulated losses - intangible assets"
-          },
-          {
-            "criterion": "Minimum Average Annual Turnover (MAAT)",
-            "requirement": "MAAT for best three years out of last five financial years should not be less than 30% of estimated tender cost"
-          },
-          {
-            "criterion": "Liquid Assets",
-            "requirement": "Must have liquid assets and/or evidence of access to fund based credit facilities of not less than 10% of estimated tender cost. Credit facility must be earmarked for the Works on receipt of Bid"
-          },
-          {
-            "criterion": "Joint Venture Requirements",
-            "requirement": "All JV partners must meet Net Worth requirement individually. JV must collectively meet MAAT and Liquid Assets requirements. At least one partner must meet 40% of minimum criteria, others must meet 25%"
-          },
-          {
-            "criterion": "Litigation Limit",
-            "requirement": "All pending litigations shall in total not be more than fifty percent (50%) of the bidder's net worth"
-          }
-        ]
+        {
+          "category": "Engineering Services",
+          "details": "Providing engineering data and drawings for review, approval and records. Supply, testing, packing, transportation and insurance from manufacturer's work to site. Receipt, storage, insurance, preservation and conservation of equipments at site"
+        },
+        {
+          "category": "New 33/11 kV Power Substations",
+          "details": "Design, engineering and construction of new primary substations with 33kV incoming lines and 11kV outgoing feeders. Includes all electrical equipment, civil works, testing and commissioning"
+        },
+        {
+          "category": "Distribution Transformer Substations",
+          "details": "New distribution transformer substations with capacity 16 KVA to 315 KVA (single phase and three phase) installed on double pole structures. Includes survey, installation, testing and commissioning"
+        },
+        {
+          "category": "High Voltage Lines",
+          "details": "New 33 kV lines, 22 kV lines, and 11 kV lines including survey, design, erection of poles, stringing of conductors, and commissioning"
+        },
+        {
+          "category": "High Voltage Distribution System (HVDS)",
+          "details": "HVDS system for remote locations, theft prone areas, and dedicated agricultural connections. Includes 11 kV lines with distribution transformers of 10-25 KVA capacity"
+        },
+        {
+          "category": "Underground Cabling Works",
+          "details": "HT/LT underground cabling works including laying, jointing, testing and commissioning of underground cables"
+        },
+        {
+          "category": "LT Lines",
+          "details": "Low tension distribution lines for consumer connections including poles, conductors, and associated hardware"
+        },
+        {
+          "category": "Augmentation Works",
+          "details": "Augmentation of existing power transformers and substations, renovation works of existing infrastructure"
+        },
+        {
+          "category": "Civil Works",
+          "details": "Design, engineering and construction of all civil works at power substations, line foundations, DTR substations including soil investigation. All works as per Indian Laws, Standards and Codes"
+        },
+        {
+          "category": "Asset Documentation",
+          "details": "GIS tagging of all new assets using mobile app. Engraving 'Developed under MPDEP (ADB) Scheme' on materials. Installation of signboards for major infrastructure showing work details, commissioning date, cost, and scheme information"
+        },
+        {
+          "category": "Project Completion",
+          "details": "Preparation of project completion report/closure proposal with clear indication of completion of outstanding/remedial work. Warranty period services and activities as per contract"
+        }
+      ],
+      "eligibility_and_qualification": {
+        "_status": "not_extracted"
       },
       "financial_terms": {
-        "emd": {
-          "percentage": 2,
-          "max_cap_inr": 5,
-          "form": "Electronic Bank Guarantee (eBG)"
-        },
-        "bank_details": {
-          "bank": "Bank of Maharashtra",
-          "account": "20045003931",
-          "ifsc": "MAHB0000002"
-        },
-        "bid_validity_days": 180,
-        "standard_timeline_days": 24,
-        "delayed_interest_rate": "MCLR for one year of State Bank of India",
-        "advance_payments": [
-          {
-            "component": "Supply",
-            "percentage": 15,
-            "conditions": [
-              "Initial interest bearing adjustable Advance of 15% of Contract Price for Contract Part I",
-              "released in 2 installments of 7.5% each"
-            ]
-          },
-          {
-            "component": "Installation Services",
-            "percentage": 10,
-            "conditions": [
-              "Initial interest bearing adjustable Advance of 10% of Contract Price for Contract Part II",
-              "released in 2 installments of 5% each"
-            ]
-          }
-        ],
-        "progressive_payments": [
-          {
-            "component": "Supply",
-            "milestone": "Receipt and acceptance of Plant/equipment/goods/materials",
-            "percentage": 60
-          },
-          {
-            "component": "Supply",
-            "milestone": "Erection, testing and commissioning",
-            "percentage": 30
-          },
-          {
-            "component": "Supply",
-            "milestone": "Final installment after successful commissioning",
-            "percentage": 10
-          },
-          {
-            "component": "Installation Services",
-            "milestone": "Erection, testing and commissioning of works",
-            "percentage": 90
-          },
-          {
-            "component": "Installation Services",
-            "milestone": "Final installment after successful commissioning",
-            "percentage": 10
-          }
-        ]
-      },
-      "price_variation": {
-        "is_applicable": true,
-        "firm_components": [
-          "Charges for Erection, Inland Freight & Insurance",
-          "All other equipment/items except those specified under applicable materials",
-          "Advance payment portion (no price adjustment applicable on advance)"
-        ],
-        "variable_components": [
-          "ACSR Conductor",
-          "Station/Power Transformers",
-          "Distribution Transformers (Aluminum/Copper wound)",
-          "Cables",
-          "66/11 KV & 33/11 KV Switchgear",
-          "Transmission Line Towers and Steel Structures",
-          "Steel Tubular and Polygonal Poles",
-          "Aerial Bunched Cables",
-          "All materials published by IEEMA price variation formulas"
-        ],
-        "materials": [
-          {
-            "name": "ACSR Conductor",
-            "formula": "P = Po + WA(AL \u2013 ALo) + WF(FE \u2013 FEo) [For Excise duty units] or P = Po + WA(ALe \u2013 ALoe) + WF(FEe \u2013 FEoe) [For Excise duty exempted units]",
-            "index_source": "IEEMA circular IEEMA/PVC/CONDUCTOR/2012"
-          },
-          {
-            "name": "Power Transformers",
-            "formula": "P = 0.01 X Po (6 + 32 X (C/Co) + 27 X (ES/ESo) + 12 X (IS/ISo) + 4 X (IM/IMo) + 9 X (TO/TOo) + 10 X (W/Wo))",
-            "index_source": "IEEMA circular IEEMA/PVC/PWR TRF_upto 400 KV/2021"
-          },
-          {
-            "name": "Distribution Transformers - Aluminum Wound",
-            "formula": "P = 0.01 X Po (8 + 22 X (AL/ALo) + 36 X(ES/ESo) + 12 X (IS/ISo) + 5 X (IM/IMo) + 10 X(TO/TOo) + 7 X (W/Wo))",
-            "index_source": "IEEMA circular IEEMA/PVC/DIST_AL_upto 2.5 MVA/2021"
-          },
-          {
-            "name": "Distribution Transformers - Copper Wound",
-            "formula": "P = 0.01 X Po (7 + 41 X (C/Co) + 23 X(ES/ESo) + 10X (IS/ISo) + 5 X (IM/IMo) + 8 X(TO/TOo) + 6 X (W/Wo))",
-            "index_source": "IEEMA circular IEEMA/PVC/DIST_CU_upto 2.5 MVA/2021"
-          },
-          {
-            "name": "66/11 KV & 33/11 KV Switchgear",
-            "formula": "P = 0.01 X Po (20 + 28(IS/ISo) + 26(C/Co) + 4(AL/ALo) + 9(ln/lno) + 13(W/Wo))",
-            "index_source": "IEEMA circular IEEMA/PVC/MVSWGR/2019 (R-2)"
-          },
-          {
-            "name": "Steel Transmission Line Towers",
-            "formula": "EC1= EC0 * [F + 0.18 * (HA1/HA0) + 0.40 * (LA1/LA0) + 0.16 * (Zn1/Zn0) + 0.11 * (L1/L0)] [For both heavy and lighter angles]",
-            "index_source": "IEEMA Circular No. IEEMA(PVC)/TLT/(R)/02/2007"
-          },
-          {
-            "name": "Steel Tubular Poles",
-            "formula": "P = Po/100 (7 + 70(IS/ISo) + 13(Zn/Zno) + 10(W/Wo))",
-            "index_source": "IEEMA price variation formula for poles"
-          },
-          {
-            "name": "Steel Polygonal Poles",
-            "formula": "P = Po/100 (9 + 64(IS/ISo) + 13(Zn/Zno) + 14(W/Wo))",
-            "index_source": "IEEMA price variation formula for poles"
-          },
-          {
-            "name": "Power Cables - Aluminum PVC 1.1kV",
-            "formula": "P=Po + AlF(AL \u2013 Alo) + CCFAl(PVCC \u2013 PVCco) + FeF(Fe \u2013 Feo)",
-            "index_source": "IEEMA circular IEEMA/DIV/CAB/05 dated 24.04.2018"
-          },
-          {
-            "name": "Power Cables - Copper PVC 1.1kV",
-            "formula": "P = Po + CuF(Cu \u2013 Cuo) + CCFCu(PVCC \u2013 PVCco) + FeF(Fe \u2013 Feo)",
-            "index_source": "IEEMA circular IEEMA/DIV/CAB/05 dated 24.04.2018"
-          },
-          {
-            "name": "HV Aerial Bunched Cables - Aluminum",
-            "formula": "P = P0 + Alph *n *(Al-Al0) + Alm(Al-Al0) + CUFtph * n *(Cu-Cu0) + CCF1Alph * n* (CC-CC0) + CCF2Alph * n *(PVCc-PVCc0) + CCFAlm (CC-CC0)",
-            "index_source": "IEEMA circular IEEMA(PVC)/AB CABLE/2017"
-          }
-        ]
+        "_status": "not_extracted"
       },
       "contract_and_bidding": {
-        "completion_time_months": 24,
-        "defect_liability_period_months": 12,
-        "liquidated_damages": {
-          "rate_per_week_percent": 0.15,
-          "cap_percent": 5
-        },
-        "special_requirements": [
-          "Performance Security: 3% of Contract Price",
-          "Performance Security valid till 180 days beyond Defect Liability Period",
-          "Quality control by Third Party Quality Monitoring Agency (TPQMA)",
-          "State Electrical Inspectorate approval required",
-          "Contractor liable for defects found by Electrical Inspector at no extra cost",
-          "Volume and quality of concreting must meet specifications - contractor to redo at own cost if defective",
-          "All metallic structures must be galvanized - replacement required if rusted",
-          "Painting of metallic supports as per specifications - re-painting required if rusted",
-          "Employer reserves right to withhold payment for defective works",
-          "Quantity variation limit: +/-50% for individual items"
-        ],
-        "technical_bid_documents": {
-          "grouped_documents": [
-            "Letter of Bid - Technical Part",
-            "Bid Security or Bid-Securing Declaration",
-            "Authorization document for bid signatory",
-            "Bidder's Eligibility documentary evidence",
-            "Qualifications documentary evidence",
-            "Eligibility of Goods/Works/Plant documentary evidence",
-            "Conformity Undertaking on Compliance of bidding documents",
-            "Integrity Pact duly signed",
-            "Legal status documents (Certificate of Incorporation/Partnership deed etc.)",
-            "Self-certified copy of PAN",
-            "Self-certified copy of GST Registration",
-            "Self-certified copy of MSME (if applicable)",
-            "Bidder Information Sheet",
-            "Power of Attorney",
-            "Declaration of conformance to eligibility requirements",
-            "Local Content Certificate (if applicable)",
-            "Joint Venture documents (if applicable): Power of Attorney, Joint Deed of Undertaking, Joint Venture Agreement",
-            "Qualification Requirements data and documentary evidence",
-            "Details of major Plant and Installation Services to be subcontracted",
-            "Statement of Deviation from requirements",
-            "Work Completion Schedule",
-            "Guarantee Declaration",
-            "Information regarding ex-employees of Employer",
-            "Price Adjustment Data",
-            "Option for Interest bearing Initial Advance payment and E-payment information",
-            "Declaration for tax exemptions",
-            "Bank Guarantee verification checklist",
-            "Additional Information/documents",
-            "Certificate from banker indicating fund-based limits"
-          ],
-          "has_price_disclosure_warning": true
-        }
+        "_status": "not_extracted"
       },
-      "scope_of_work": []
+      "price_variation": {
+        "_status": "not_extracted"
+      }
     }
   ],
   "_analytics": {
-    "input_tokens": 214816,
-    "output_tokens": 8230,
+    "input_tokens": 12660,
+    "output_tokens": 2242,
     "cache_creation_input_tokens": 0,
-    "cache_read_input_tokens": 0,
-    "total_chunks": 1237,
-    "size_multiplier": 2.06
+    "cache_read_input_tokens": 4008
   }
 }

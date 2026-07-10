@@ -54,5 +54,7 @@ CLAUDE.md
 
 /docs
 *.sqlite*
-xs-security.json
 .mcp.json
+
+# React build output (rebuilt from CI — do not commit hashed bundles)
+cap-backend/app/assets/

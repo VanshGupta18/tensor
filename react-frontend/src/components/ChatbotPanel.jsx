@@ -21,6 +21,7 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
   const [processingType, setProcessingType] = useState(null); // 'chat' | 'upload'
   const [isUploadComplete, setIsUploadComplete] = useState(false);
   const [uploadFilename, setUploadFilename] = useState('');
+  const [uploadProgress, setUploadProgress] = useState(null);
   const [confirmStates, setConfirmStates] = useState({});
 
   const fileInputRef = useRef(null);
@@ -124,8 +125,8 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
       return;
     }
 
-    addMessage(`Uploading **${file.name}**…`, 'user');
     setUploadFilename(file.name);
+    setUploadProgress(null);
     setIsProcessing(true);
     setIsUploadComplete(false);
     setProcessingType('upload');
@@ -133,7 +134,9 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
     try {
       const raw = await new Promise((resolve, reject) => {
         const timeout = setTimeout(() => reject(new Error('Timed out after 10 minutes.')), 600_000);
-        uploadFileForProcessing(file, tenderId)
+        uploadFileForProcessing(file, tenderId, (job) => {
+          if (job?.progress) setUploadProgress(job.progress);
+        })
           .then(r => { clearTimeout(timeout); resolve(r); })
           .catch(r => { clearTimeout(timeout); reject(r); });
       });
@@ -232,7 +235,7 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
           {isProcessing && (
             <div className="chat-msg bot">
               {processingType === 'upload' ? (
-                <UploadTimeline filename={uploadFilename} isComplete={isUploadComplete} />
+                <UploadTimeline key={uploadFilename} filename={uploadFilename} progress={uploadProgress} isComplete={isUploadComplete} />
               ) : (
                 <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
                   {[0, 0.2, 0.4].map((delay, i) => (

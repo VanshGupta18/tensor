@@ -3,10 +3,9 @@ import { useQueryClient } from '@tanstack/react-query';
 import SubmitRemarksModal from './SubmitRemarksModal';
 import { useTenderDocuments } from '../hooks/useTender.js';
 import { updateAIResult } from '../api/tenderApi.js';
-import { base64ToBlob } from '../utils/fileUtils.js';
 import { fmtDateTime } from '../utils/formatters.js';
 import { getPathValue, applyEditsToData } from '../utils/dataUtils.js';
-import { SKIP_SECTIONS, SECTION_ORDER, SECTION_LABELS, renderObjectField, renderSmartSection } from './details/SmartRenderer.jsx';
+import { SKIP_SECTIONS, SECTION_ORDER, SECTION_LABELS, isSectionReal, renderObjectField, renderSmartSection } from './details/SmartRenderer.jsx';
 
 // tender_information is fully flattened onto Tenders now (see schema.cds) — contacts
 // is the one field stored as JSON text rather than its own column.
@@ -461,6 +460,8 @@ export default function DetailsScreen({
                 }
                 return [[k, v]];
               })
+              // Match PDF: only render sections with real extracted content.
+              .filter(([, v]) => isSectionReal(v))
               .sort(([a], [b]) => {
                 const ai = SECTION_ORDER.indexOf(a), bi = SECTION_ORDER.indexOf(b);
                 if (ai === -1 && bi === -1) return 0;

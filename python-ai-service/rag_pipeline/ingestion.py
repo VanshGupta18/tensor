@@ -17,6 +17,8 @@ from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.vector_stores.postgres import PGVectorStore
 from llama_index.storage.index_store.postgres import PostgresIndexStore
 
+from rag_pipeline.ml_device import ML_DEVICE
+
 POSTGRES_URL = os.getenv(
     "POSTGRES_URL", "postgresql://tenderflow:tenderflow@localhost:5433/tenderflow"
 )
@@ -35,7 +37,7 @@ _vector_store = None
 def get_embedding_model() -> HuggingFaceEmbedding:
     global _embed_model
     if _embed_model is None:
-        _embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL_NAME)
+        _embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL_NAME, device=ML_DEVICE)
     return _embed_model
 
 
@@ -77,9 +79,7 @@ def _content_hash_filter(content_hash: str) -> MetadataFilters:
 
 
 def save_pdf(pdf_path: str, content_hash: str) -> Path:
-    """Persist the raw PDF to local disk, keyed by content hash. Kept (not deleted like
-    the old pipeline did) so it can be inspected/re-parsed later — safe now that this is
-    self-hosted local storage rather than HANA on BTP Trial."""
+    """Persist the raw PDF to local disk, keyed by content hash."""
     dest = STORAGE_DIR / f"{content_hash}.pdf"
     if not dest.exists():
         dest.write_bytes(Path(pdf_path).read_bytes())
@@ -136,6 +136,27 @@ def ingest_pdf(pdf_path: str, content_hash: str, tender_ref: str = "") -> int:
 
     print(f"[ingestion] {content_hash[:12]}...: indexed {len(nodes)} chunks from {len(documents)} pages")
     return len(nodes)
+
+
+def get_document_stats(content_hash: str) -> dict:
+    """Page and chunk counts for a persisted document (used for dynamic budgets)."""
+    nodes = get_document_nodes(content_hash)
+    if not nodes:
+        return {"page_count": 0, "chunk_count": 0, "chunks_per_page": 0.0}
+
+    pages = set()
+    for node in nodes:
+        page = (node.metadata or {}).get("page")
+        if page is not None:
+            pages.add(int(page))
+
+    page_count = len(pages) if pages else max(1, len(nodes) // 3)
+    chunk_count = len(nodes)
+    return {
+        "page_count": page_count,
+        "chunk_count": chunk_count,
+        "chunks_per_page": round(chunk_count / max(page_count, 1), 2),
+    }
 
 
 def get_document_nodes(content_hash: str):

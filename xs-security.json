@@ -1,48 +1,47 @@
 {
-  "xsappname": "tender-platform",
+  "xsappname": "tender-cap",
   "tenant-mode": "dedicated",
-  "description": "Tender Management Platform – XSUAA security descriptor",
+  "description": "Security config for TenderFlow CAP application",
   "scopes": [
     {
       "name": "$XSAPPNAME.admin",
-      "description": "Full access: create, update, approve tenders"
+      "description": "Admin access"
     },
     {
-      "name": "$XSAPPNAME.reviewer",
-      "description": "Read and review tenders; cannot approve"
+      "name": "$XSAPPNAME.authenticated-user",
+      "description": "Authenticated user access"
     }
   ],
-  "attributes": [],
   "role-templates": [
     {
-      "name": "Admin",
-      "description": "Tender administrator",
+      "name": "admin",
+      "description": "Full admin access",
       "scope-references": [
         "$XSAPPNAME.admin",
-        "$XSAPPNAME.reviewer"
+        "$XSAPPNAME.authenticated-user"
       ]
     },
     {
-      "name": "Reviewer",
-      "description": "Tender reviewer",
+      "name": "reviewer",
+      "description": "Reviewer access",
       "scope-references": [
-        "$XSAPPNAME.reviewer"
+        "$XSAPPNAME.authenticated-user"
       ]
     }
   ],
   "role-collections": [
     {
-      "name": "TenderAdmin",
-      "description": "Tender Platform Administrator",
+      "name": "TenderFlow Admin",
+      "description": "TenderFlow administrators",
       "role-template-references": [
-        "$XSAPPNAME.Admin"
+        "$XSAPPNAME.admin"
       ]
     },
     {
-      "name": "TenderReviewer",
-      "description": "Tender Platform Reviewer",
+      "name": "TenderFlow Reviewer",
+      "description": "TenderFlow reviewers",
       "role-template-references": [
-        "$XSAPPNAME.Reviewer"
+        "$XSAPPNAME.reviewer"
       ]
     }
   ]

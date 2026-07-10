@@ -88,14 +88,6 @@ export async function getTenders() {
 }
 
 /**
- * Fetch a single tender by ID.
- */
-export async function getTenderById(id) {
-  const t = await api.get(`/Tenders(ID='${encodeURIComponent(id)}',IsActiveEntity=true)?$expand=audits`);
-  return toReactShape(t);
-}
-
-/**
  * Delete a tender by ID.
  */
 export async function deleteTender(id) {
@@ -224,13 +216,3 @@ export async function downloadTender(tender) {
   }
 }
 
-/**
- * Fetch PDF as a base64 string without triggering a download.
- * Used by DetailsScreen to pre-fetch on mount for instant download.
- */
-export async function fetchPDFBase64(tenderId) {
-  const result = await callAction('generatePDF', { tenderId });
-  const b64 = result?.value ?? result;
-  if (!b64 || typeof b64 !== 'string') throw new Error('Invalid PDF data returned');
-  return b64;
-}

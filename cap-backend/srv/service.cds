@@ -89,16 +89,6 @@ service TenderService @(path: '/odata/v4/tender') {
     ) returns String;
 
     /**
-     * Forward a chat message to the Python AI service.
-     * Persist the conversation and return the AI reply.
-     */
-    action chat(
-        tenderId : String,
-        message  : String,
-        sender   : String
-    ) returns String;   // the bot's reply text
-
-    /**
      * Generate (or retrieve cached) PDF synopsis for a tender.
      * Returns base64-encoded PDF bytes so it works cleanly over OData JSON.
      */

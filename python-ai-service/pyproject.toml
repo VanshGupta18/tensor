@@ -22,3 +22,19 @@ dependencies = [
     "requests>=2.32",
     "sentence-transformers>=5.6.0",
 ]
+
+# On CF Linux builds (uv), pull CPU-only torch to avoid ~500MB CUDA wheels.
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", marker = "sys_platform == 'linux'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

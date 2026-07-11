@@ -1,13 +1,7 @@
 'use strict';
 const fs = require('fs');
 
-let axios;
-try {
-  axios = require('axios');
-} catch {
-  console.warn('[aiService] axios not installed – Python AI calls will fail.');
-}
-
+const axios = require('axios');
 const FormData = require('form-data');
 const PYTHON_AI_URL = process.env.PYTHON_AI_URL || 'http://localhost:8000';
 
@@ -21,11 +15,6 @@ const PYTHON_AI_URL = process.env.PYTHON_AI_URL || 'http://localhost:8000';
 async function processFileWithAI(filepath, filename, mimeType) {
   let pyTenders = null;
   let pyError = null;
-
-  if (!axios) {
-    pyError = 'Python AI service unavailable (axios not installed).';
-    return { pyTenders, pyError };
-  }
 
   try {
     const form = new FormData();

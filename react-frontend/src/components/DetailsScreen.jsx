@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import SubmitRemarksModal from './SubmitRemarksModal';
-import { useTenderDocuments } from '../hooks/useTender.js';
-import { updateAIResult } from '../api/tenderApi.js';
+import { updateAIResult, getTenderDocuments } from '../api/tenderApi.js';
 import { fmtDateTime } from '../utils/formatters.js';
 import { getPathValue, applyEditsToData } from '../utils/dataUtils.js';
 import { SKIP_SECTIONS, SECTION_ORDER, SECTION_LABELS, isSectionReal, renderObjectField, renderSmartSection } from './details/SmartRenderer.jsx';
@@ -17,6 +16,31 @@ const parseContacts = raw => {
 const TABLE_TH = { padding: '7px 10px', fontSize: '12px', fontWeight: 600, background: 'var(--bg-hover,#f9fafb)', color: 'var(--text-muted)', textAlign: 'left', borderBottom: '1px solid var(--border-color,#e5e7eb)' };
 const TABLE_TD = { padding: '8px 10px', fontSize: '13px', verticalAlign: 'top', borderBottom: '1px solid var(--border-color,#e5e7eb)' };
 
+// The 12 fields that live directly on the tender (as opposed to aiData/rawResponse) —
+// seeded once from tender.details into a single formValues object instead of one
+// useState per field.
+const fieldsFromTender = (tender) => ({
+  title:             tender.title,
+  budget:            tender.details.budget,
+  deadline:          tender.details.deadline,
+  status:            tender.details.status,
+  location:          tender.details.location,
+  contractor:        tender.details.contractor,
+  issuingAuthority:  tender.details.issuingAuthority || '',
+  contractType:      tender.details.contractType || '',
+  bidSystem:         tender.details.bidSystem || '',
+  fundingAgency:     tender.details.fundingAgency || '',
+  tenderFee:         tender.details.tenderFee || '',
+  budgetCategory:    tender.details.budgetCategory || '',
+});
+
+const FIELD_LABELS = {
+  title: 'Title', budget: 'Budget', deadline: 'Deadline', status: 'Status',
+  location: 'Location', contractor: 'Contractor',
+  issuingAuthority: 'Issuing Authority', contractType: 'Contract Type', bidSystem: 'Bid System',
+  fundingAgency: 'Funding Agency', tenderFee: 'Tender Fee', budgetCategory: 'Budget Category',
+};
+
 export default function DetailsScreen({
   tender,
   initialIsEditing,
@@ -26,32 +50,18 @@ export default function DetailsScreen({
   onDownload,
 }) {
   const [isEditing,   setIsEditing]   = useState(initialIsEditing);
-  const [title,       setTitle]       = useState(tender.title);
-  const [budget,      setBudget]      = useState(tender.details.budget);
-  const [deadline,    setDeadline]    = useState(tender.details.deadline);
-  const [status,      setStatus]      = useState(tender.details.status);
-  const [location,    setLocation]    = useState(tender.details.location);
-  const [contractor,  setContractor]  = useState(tender.details.contractor);
+  const [formValues,  setFormValues]  = useState(() => fieldsFromTender(tender));
+  const setField = (key, value) => setFormValues(prev => ({ ...prev, [key]: value }));
+  const {
+    title, budget, deadline, status, location, contractor,
+    issuingAuthority, contractType, bidSystem, fundingAgency, tenderFee, budgetCategory,
+  } = formValues;
 
-  // tender_information fields — plain editable state, same as the fields above,
-  // since this data now lives directly on Tenders rather than inside aiData/rawResponse.
-  const [issuingAuthority, setIssuingAuthority] = useState(tender.details.issuingAuthority || '');
-  const [contractType,     setContractType]     = useState(tender.details.contractType || '');
-  const [bidSystem,        setBidSystem]        = useState(tender.details.bidSystem || '');
-  const [fundingAgency,    setFundingAgency]    = useState(tender.details.fundingAgency || '');
-  const [tenderFee,        setTenderFee]        = useState(tender.details.tenderFee || '');
-  const [budgetCategory,   setBudgetCategory]   = useState(tender.details.budgetCategory || '');
   const [contacts,         setContacts]         = useState(() => parseContacts(tender.details.contacts));
 
   const [showRemarksModal, setShowRemarksModal] = useState(false);
   const [changedFields,    setChangedFields]    = useState([]);
   const [hasAiInSave,      setHasAiInSave]      = useState(false);
-
-  const handleDownload = () => {
-    if (onDownload) {
-      onDownload(tender);
-    }
-  };
 
   // AI extracted data
   const [aiData,          setAiData]          = useState(null);
@@ -59,21 +69,17 @@ export default function DetailsScreen({
   const [aiEdits,         setAiEdits]         = useState({});   // path → new content
 
   const queryClient = useQueryClient();
-  const { data: documents = [], isLoading: aiLoading } = useTenderDocuments(tender.id);
+  // Fetches all documents (with AI result) for this tender — cached for 5 minutes,
+  // re-used when navigating back to the same tender.
+  const { data: documents = [], isLoading: aiLoading } = useQuery({
+    queryKey: ['tender', tender.id, 'documents'],
+    queryFn: () => getTenderDocuments(tender.id),
+    enabled: !!tender.id,
+    staleTime: 5 * 60 * 1000,
+  });
 
   useEffect(() => {
-    setTitle(tender.title);
-    setBudget(tender.details.budget);
-    setDeadline(tender.details.deadline);
-    setStatus(tender.details.status);
-    setLocation(tender.details.location);
-    setContractor(tender.details.contractor);
-    setIssuingAuthority(tender.details.issuingAuthority || '');
-    setContractType(tender.details.contractType || '');
-    setBidSystem(tender.details.bidSystem || '');
-    setFundingAgency(tender.details.fundingAgency || '');
-    setTenderFee(tender.details.tenderFee || '');
-    setBudgetCategory(tender.details.budgetCategory || '');
+    setFormValues(fieldsFromTender(tender));
     setContacts(parseContacts(tender.details.contacts));
   }, [tender]);
 
@@ -108,14 +114,14 @@ export default function DetailsScreen({
         // populate them from rawResponse's tender_overview section.
         const ov = data?.tender_overview;
         if (ov && typeof ov === 'object' && ov._status !== 'not_extracted') {
-          if (!issuingAuthority && ov.issuing_authority) setIssuingAuthority(ov.issuing_authority);
-          if (!contractType     && ov.contract_type)     setContractType(ov.contract_type);
-          if (!bidSystem        && ov.bid_system)        setBidSystem(ov.bid_system);
-          if (!fundingAgency    && ov.funding_agency)    setFundingAgency(ov.funding_agency);
-          if (!budgetCategory   && ov.budget_category)   setBudgetCategory(ov.budget_category);
+          if (!issuingAuthority && ov.issuing_authority) setField('issuingAuthority', ov.issuing_authority);
+          if (!contractType     && ov.contract_type)     setField('contractType', ov.contract_type);
+          if (!bidSystem        && ov.bid_system)        setField('bidSystem', ov.bid_system);
+          if (!fundingAgency    && ov.funding_agency)    setField('fundingAgency', ov.funding_agency);
+          if (!budgetCategory   && ov.budget_category)   setField('budgetCategory', ov.budget_category);
           if (!tenderFee && ov.tender_fee?.amount) {
             const fee = ov.tender_fee;
-            setTenderFee(`${fee.amount} ${fee.currency || ''}`.trim());
+            setField('tenderFee', `${fee.amount} ${fee.currency || ''}`.trim());
           }
           if (contacts.length === 0 && Array.isArray(ov.contacts) && ov.contacts.length > 0) {
             setContacts(ov.contacts);
@@ -129,20 +135,19 @@ export default function DetailsScreen({
 
 
   const getChangesList = () => {
-    const list = [];
-    if (title     !== tender.title)             list.push({ field: 'Title',      oldVal: tender.title,             newVal: title });
-    if (budget    !== tender.details.budget)    list.push({ field: 'Budget',     oldVal: tender.details.budget,    newVal: budget });
-    if (deadline  !== tender.details.deadline)  list.push({ field: 'Deadline',   oldVal: tender.details.deadline,  newVal: deadline });
-    if (status    !== tender.details.status)    list.push({ field: 'Status',     oldVal: tender.details.status,    newVal: status });
-    if (location  !== tender.details.location)  list.push({ field: 'Location',   oldVal: tender.details.location,  newVal: location });
-    if (contractor!== tender.details.contractor)list.push({ field: 'Contractor', oldVal: tender.details.contractor,newVal: contractor });
     const eq = (a, b) => (a || '') === (b || '');
-    if (!eq(issuingAuthority, tender.details.issuingAuthority)) list.push({ field: 'Issuing Authority', oldVal: tender.details.issuingAuthority, newVal: issuingAuthority });
-    if (!eq(contractType,     tender.details.contractType))     list.push({ field: 'Contract Type',     oldVal: tender.details.contractType,     newVal: contractType });
-    if (!eq(bidSystem,        tender.details.bidSystem))        list.push({ field: 'Bid System',        oldVal: tender.details.bidSystem,        newVal: bidSystem });
-    if (!eq(fundingAgency,    tender.details.fundingAgency))    list.push({ field: 'Funding Agency',    oldVal: tender.details.fundingAgency,    newVal: fundingAgency });
-    if (!eq(tenderFee,        tender.details.tenderFee))        list.push({ field: 'Tender Fee',        oldVal: tender.details.tenderFee,        newVal: tenderFee });
-    if (!eq(budgetCategory,   tender.details.budgetCategory))   list.push({ field: 'Budget Category',   oldVal: tender.details.budgetCategory,   newVal: budgetCategory });
+    // title/budget/deadline/status/location/contractor compare with strict !==;
+    // the tender_information fields tolerate null/undefined/'' as equal.
+    const strictFields = new Set(['title', 'budget', 'deadline', 'status', 'location', 'contractor']);
+    const oldValue = key => key === 'title' ? tender.title : tender.details[key];
+
+    const list = Object.entries(formValues)
+      .filter(([key, val]) => {
+        const old = oldValue(key);
+        return strictFields.has(key) ? val !== old : !eq(val, old);
+      })
+      .map(([key, val]) => ({ field: FIELD_LABELS[key], oldVal: oldValue(key), newVal: val }));
+
     if (JSON.stringify(contacts) !== JSON.stringify(parseContacts(tender.details.contacts))) {
       list.push({ field: 'Contacts', oldVal: tender.details.contacts || '[]', newVal: JSON.stringify(contacts) });
     }
@@ -165,18 +170,7 @@ export default function DetailsScreen({
   const handleCancelEdit = () => {
     setIsEditing(false);
     setAiEdits({});
-    setTitle(tender.title);
-    setBudget(tender.details.budget);
-    setDeadline(tender.details.deadline);
-    setStatus(tender.details.status);
-    setLocation(tender.details.location);
-    setContractor(tender.details.contractor);
-    setIssuingAuthority(tender.details.issuingAuthority || '');
-    setContractType(tender.details.contractType || '');
-    setBidSystem(tender.details.bidSystem || '');
-    setFundingAgency(tender.details.fundingAgency || '');
-    setTenderFee(tender.details.tenderFee || '');
-    setBudgetCategory(tender.details.budgetCategory || '');
+    setFormValues(fieldsFromTender(tender));
     setContacts(parseContacts(tender.details.contacts));
   };
 
@@ -251,7 +245,7 @@ export default function DetailsScreen({
           {!isEditing ? (
             <>
               <button onClick={() => setIsEditing(true)} className="btn btn-sec">Edit</button>
-              <button className="btn btn-primary" onClick={handleDownload}>
+              <button className="btn btn-primary" onClick={() => onDownload(tender)}>
               Download PDF
             </button>
             </>
@@ -273,23 +267,23 @@ export default function DetailsScreen({
             <div className="form-group">
               <label>Tender Title</label>
               {isEditing
-                ? <input type="text" value={title} onChange={e => setTitle(e.target.value)} className="form-input" />
+                ? <input type="text" value={title} onChange={e => setField('title', e.target.value)} className="form-input" />
                 : <div className="form-input frozen" style={{ whiteSpace: 'normal', wordBreak: 'break-word', height: 'auto', minHeight: '38px' }}>{title}</div>}
             </div>
             <div className="form-group">
               <label>Budget Allocation</label>
               {isEditing
-                ? <input type="text" value={budget} onChange={e => setBudget(e.target.value)} className="form-input" />
+                ? <input type="text" value={budget} onChange={e => setField('budget', e.target.value)} className="form-input" />
                 : <div className="form-input frozen" style={{ whiteSpace: 'normal', wordBreak: 'break-word', height: 'auto', minHeight: '38px' }}>{budget}</div>}
             </div>
             <div className="form-group">
               <label>Deadline</label>
-              <input type="date" value={deadline} onChange={e => setDeadline(e.target.value)} className={`form-input ${!isEditing ? 'frozen' : ''}`} disabled={!isEditing} />
+              <input type="date" value={deadline} onChange={e => setField('deadline', e.target.value)} className={`form-input ${!isEditing ? 'frozen' : ''}`} disabled={!isEditing} />
             </div>
             <div className="form-group">
               <label>Lifecycle Status</label>
               {isEditing ? (
-                <select value={status} onChange={e => setStatus(e.target.value)} className="form-input">
+                <select value={status} onChange={e => setField('status', e.target.value)} className="form-input">
                   <option value="Draft">Draft</option>
                   <option value="Reviewed">Reviewed</option>
                   <option value="Approved">Approved</option>
@@ -301,13 +295,13 @@ export default function DetailsScreen({
             <div className="form-group">
               <label>Location</label>
               {isEditing
-                ? <input type="text" value={location} onChange={e => setLocation(e.target.value)} className="form-input" />
+                ? <input type="text" value={location} onChange={e => setField('location', e.target.value)} className="form-input" />
                 : <div className="form-input frozen" style={{ whiteSpace: 'normal', wordBreak: 'break-word', height: 'auto', minHeight: '38px' }}>{location}</div>}
             </div>
             <div className="form-group">
               <label>Assigned Contractor</label>
               {isEditing
-                ? <input type="text" value={contractor} onChange={e => setContractor(e.target.value)} className="form-input" />
+                ? <input type="text" value={contractor} onChange={e => setField('contractor', e.target.value)} className="form-input" />
                 : <div className="form-input frozen" style={{ whiteSpace: 'normal', wordBreak: 'break-word', height: 'auto', minHeight: '38px' }}>{contractor}</div>}
             </div>
           </div>
@@ -327,15 +321,16 @@ export default function DetailsScreen({
                 </div>
               </div>
             );
-            const editField = (key, label, value, setValue) => (
+            const editField = (key, label, value) => (
               <div key={key} className="form-group">
                 <label>{label}</label>
-                <input type="text" value={value} onChange={e => setValue(e.target.value)} className="form-input" />
+                <input type="text" value={value} onChange={e => setField(key, e.target.value)} className="form-input" />
               </div>
             );
 
+            const referenceNoField = frozenField('Reference No', tender.tenderNo);
             const tiFields = [
-              frozenField('Reference No',      tender.tenderNo),
+              referenceNoField,
               frozenField('Issuing Authority', issuingAuthority),
               frozenField('Contract Type',     contractType),
               frozenField('Bid System',        bidSystem),
@@ -344,13 +339,13 @@ export default function DetailsScreen({
               frozenField('Budget Category',   budgetCategory),
             ].filter(Boolean);
             const tiEditFields = [
-              frozenField('Reference No', tender.tenderNo), // dedup key — not directly editable here
-              editField('issuingAuthority', 'Issuing Authority', issuingAuthority, setIssuingAuthority),
-              editField('contractType',     'Contract Type',     contractType,     setContractType),
-              editField('bidSystem',        'Bid System',        bidSystem,        setBidSystem),
-              editField('fundingAgency',    'Funding Agency',    fundingAgency,    setFundingAgency),
-              editField('tenderFee',        'Tender Fee',        tenderFee,        setTenderFee),
-              editField('budgetCategory',   'Budget Category',   budgetCategory,   setBudgetCategory),
+              referenceNoField, // dedup key — not directly editable here
+              editField('issuingAuthority', 'Issuing Authority', issuingAuthority),
+              editField('contractType',     'Contract Type',     contractType),
+              editField('bidSystem',        'Bid System',        bidSystem),
+              editField('fundingAgency',    'Funding Agency',    fundingAgency),
+              editField('tenderFee',        'Tender Fee',        tenderFee),
+              editField('budgetCategory',   'Budget Category',   budgetCategory),
             ].filter(Boolean);
 
             // New schema: key_dates is nested inside tender_overview.

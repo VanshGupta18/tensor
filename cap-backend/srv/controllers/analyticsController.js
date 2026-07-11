@@ -1,11 +1,6 @@
 'use strict';
 
-let axios;
-try {
-  axios = require('axios');
-} catch {
-  console.warn('[analyticsController] axios not installed – live analytics will fail.');
-}
+const axios = require('axios');
 
 const { PYTHON_AI_URL } = require('../services/aiService');
 
@@ -17,7 +12,6 @@ const { PYTHON_AI_URL } = require('../services/aiService');
  */
 const getLiveAnalyticsHandler = async (req, res) => {
   try {
-    if (!axios) throw new Error('axios is not installed on the server.');
     const pyRes = await axios.get(`${PYTHON_AI_URL}/analytics/live`, { timeout: 10_000 });
     res.json(pyRes.data);
   } catch (err) {

@@ -912,8 +912,7 @@ select.form-input { cursor: pointer; }
   height: 100%;
   border-radius: 999px;
   background: var(--copper);
-  /* Width driven every frame in JS — CSS transition causes jump/lag */
-  transition: none;
+  transition: width 0.3s ease;
 }
 
 .upload-progress__bar-fill--done {

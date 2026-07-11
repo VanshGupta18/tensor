@@ -2,7 +2,6 @@ import json
 import requests
 from rag_pipeline.step2_llm_client import get_result, _session
 from rag_pipeline.retrieval import retrieve_chunks
-from rag_pipeline.llama_llm_adapter import SapAiCoreLLM
 
 # Chat retrieval trims to a small, high-precision set of chunks (unlike the 9-group
 # extraction in step5_extractor.py, which keeps a wide recall-oriented set) — chat's
@@ -18,9 +17,8 @@ def _retrieve_context(content_hash: str, message: str, api_url: str):
     if not content_hash:
         return None
     try:
-        llm = SapAiCoreLLM(api_url=api_url)
         chunks = retrieve_chunks(
-            content_hash, message, llm, top_k=_CHAT_RETRIEVAL_TOP_K, rerank_top_n=_CHAT_RERANK_TOP_N
+            content_hash, message, top_k=_CHAT_RETRIEVAL_TOP_K, rerank_top_n=_CHAT_RERANK_TOP_N
         )
         return chunks or None
     except Exception as e:

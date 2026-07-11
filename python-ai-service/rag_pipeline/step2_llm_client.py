@@ -64,7 +64,9 @@ def parse_ai_json(ai_text: str) -> dict:
             raise ValueError(f"AI returned unparseable JSON after cleanup. Snippet: {text[:200]!r}") from exc
 
 
-def get_result(token: str, API_URL: str, payload: dict, retries: int = 3, timeout: int = 600) -> tuple:
+def _post_with_retries(token: str, api_url: str, payload: dict, retries: int, timeout: int) -> dict:
+    """POST with exponential-backoff retry on 5xx / connection / timeout errors.
+    Returns the parsed response JSON on success."""
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
@@ -74,19 +76,9 @@ def get_result(token: str, API_URL: str, payload: dict, retries: int = 3, timeou
     last_exc = None
     for attempt in range(retries):
         try:
-            resp = _session.post(API_URL, json=payload, headers=headers, timeout=timeout)
+            resp = _session.post(api_url, json=payload, headers=headers, timeout=timeout)
             resp.raise_for_status()
-            response_json = resp.json()
-            _u = response_json.get("usage", {})
-            print(f"[tokens] in={_u.get('input_tokens','?')} out={_u.get('output_tokens','?')} cache_write={_u.get('cache_creation_input_tokens',0)} cache_read={_u.get('cache_read_input_tokens',0)}")
-            content_list = response_json.get("content")
-            if not content_list or not isinstance(content_list, list):
-                raise ValueError(f"Unexpected API response shape: {list(response_json.keys())}")
-            first = content_list[0]
-            text = first.get("text") if isinstance(first, dict) else None
-            if not text:
-                raise ValueError(f"No 'text' in API content item: {first}")
-            return text, _u
+            return resp.json()
         except requests.exceptions.HTTPError as e:
             last_exc = e
             if resp.status_code >= 500 and attempt < retries - 1:
@@ -100,6 +92,20 @@ def get_result(token: str, API_URL: str, payload: dict, retries: int = 3, timeou
                 continue
             raise
     raise last_exc
+
+
+def get_result(token: str, API_URL: str, payload: dict, retries: int = 3, timeout: int = 600) -> tuple:
+    response_json = _post_with_retries(token, API_URL, payload, retries, timeout)
+    _u = response_json.get("usage", {})
+    print(f"[tokens] in={_u.get('input_tokens','?')} out={_u.get('output_tokens','?')} cache_write={_u.get('cache_creation_input_tokens',0)} cache_read={_u.get('cache_read_input_tokens',0)}")
+    content_list = response_json.get("content")
+    if not content_list or not isinstance(content_list, list):
+        raise ValueError(f"Unexpected API response shape: {list(response_json.keys())}")
+    first = content_list[0]
+    text = first.get("text") if isinstance(first, dict) else None
+    if not text:
+        raise ValueError(f"No 'text' in API content item: {first}")
+    return text, _u
 
 
 def build_cached_extraction_payload(
@@ -143,38 +149,14 @@ def build_cached_extraction_payload(
 
 
 def get_result_tool_use(token: str, API_URL: str, payload: dict, retries: int = 3, timeout: int = 600) -> tuple:
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "AI-Resource-Group": "grounding",
-    }
-    last_exc = None
-    for attempt in range(retries):
-        try:
-            resp = _session.post(API_URL, json=payload, headers=headers, timeout=timeout)
-            resp.raise_for_status()
-            _rj = resp.json()
-            _u = _rj.get("usage", {})
-            print(f"[tokens] in={_u.get('input_tokens','?')} out={_u.get('output_tokens','?')} cache_write={_u.get('cache_creation_input_tokens',0)} cache_read={_u.get('cache_read_input_tokens',0)}")
-            content_list = _rj.get("content", [])
-            for item in content_list:
-                if isinstance(item, dict) and item.get("type") == "tool_use":
-                    return item["input"], _u
-            for item in content_list:
-                if isinstance(item, dict) and item.get("type") == "text" and item.get("text"):
-                    return parse_ai_json(item["text"]), _u
-            raise ValueError(f"No usable content in tool-use response: {content_list}")
-        except requests.exceptions.HTTPError as e:
-            last_exc = e
-            if resp.status_code >= 500 and attempt < retries - 1:
-                time.sleep(2 ** attempt)
-                continue
-            raise
-        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
-            last_exc = e
-            if attempt < retries - 1:
-                time.sleep(2 ** attempt)
-                continue
-            raise
-    raise last_exc
+    _rj = _post_with_retries(token, API_URL, payload, retries, timeout)
+    _u = _rj.get("usage", {})
+    print(f"[tokens] in={_u.get('input_tokens','?')} out={_u.get('output_tokens','?')} cache_write={_u.get('cache_creation_input_tokens',0)} cache_read={_u.get('cache_read_input_tokens',0)}")
+    content_list = _rj.get("content", [])
+    for item in content_list:
+        if isinstance(item, dict) and item.get("type") == "tool_use":
+            return item["input"], _u
+    for item in content_list:
+        if isinstance(item, dict) and item.get("type") == "text" and item.get("text"):
+            return parse_ai_json(item["text"]), _u
+    raise ValueError(f"No usable content in tool-use response: {content_list}")

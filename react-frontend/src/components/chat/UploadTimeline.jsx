@@ -23,57 +23,12 @@ function useElapsedClock() {
   return seconds;
 }
 
-/**
- * Animate displayed % toward server target; creep slowly between polls so the
- * bar never sits frozen, and ease to 100 on completion.
- */
-function useSmoothPercent(serverPercent, isComplete) {
-  const [display, setDisplay] = useState(0);
-  const targetRef = useRef(0);
-
-  useEffect(() => {
-    if (isComplete) {
-      targetRef.current = 100;
-      return;
-    }
-    const next = Math.max(0, serverPercent ?? 0);
-    // Server is source of truth — never regress
-    if (next > targetRef.current) targetRef.current = next;
-  }, [serverPercent, isComplete]);
-
-  useEffect(() => {
-    let raf;
-    const animate = () => {
-      setDisplay(prev => {
-        const target = isComplete ? 100 : targetRef.current;
-
-        if (isComplete) {
-          const step = (100 - prev) * 0.14;
-          return step < 0.4 ? 100 : prev + step;
-        }
-
-        if (prev < target) {
-          const step = (target - prev) * 0.07;
-          return step < 0.15 ? target : prev + step;
-        }
-
-        // Between server updates, creep toward next milestone (cap 97 until done)
-        if (prev < 97) return prev + 0.025;
-        return prev;
-      });
-      raf = requestAnimationFrame(animate);
-    };
-    raf = requestAnimationFrame(animate);
-    return () => cancelAnimationFrame(raf);
-  }, [isComplete]);
-
-  return display;
-}
-
 export default function UploadTimeline({ filename, progress, isComplete }) {
   const p = progress || {};
-  const serverPercent = isComplete ? 100 : (p.percent ?? 0);
-  const displayPercent = useSmoothPercent(serverPercent, isComplete);
+  // Server is the source of truth for %; the CSS transition on the bar fill
+  // (see index.css / inline style below) eases between updates instead of a
+  // rAF loop, and never regresses.
+  const displayPercent = isComplete ? 100 : Math.max(0, p.percent ?? 0);
   const localElapsed = useElapsedClock();
   const elapsed = Math.max(localElapsed, p.elapsedSec || 0);
 

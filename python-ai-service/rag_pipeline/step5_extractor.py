@@ -15,22 +15,8 @@ from rag_pipeline.step2_llm_client import get_result_tool_use, build_cached_extr
 from rag_pipeline.ingestion import ingest_pdf, get_document_stats, get_document_nodes
 from rag_pipeline.retrieval import retrieve_chunks, get_early_page_chunks
 from rag_pipeline.chunk_budget import compute_chunk_budget, merge_and_cap_chunks, merge_boost_early_pages
-from rag_pipeline.llama_llm_adapter import SapAiCoreLLM
 
 _upload_semaphore = threading.Semaphore(2)
-
-def _get_nested(d: dict, path: str):
-    for key in path.split("."):
-        if not isinstance(d, dict):
-            return None
-        d = d.get(key)
-    return d
-
-def _set_nested(d: dict, path: str, value):
-    keys = path.split(".")
-    for key in keys[:-1]:
-        d = d.setdefault(key, {})
-    d[keys[-1]] = value
 
 def _extract_first_number(text: str):
     """Return the first float found in text, or None."""
@@ -722,7 +708,6 @@ def extract_via_targeted_retrieval(token_fn, API_URL: str, pdf_path: str, conten
     # Keep token_fn callable so each LLM call can refresh the token on long runs
     _token_fn = token_fn if callable(token_fn) else None
     _static_token = token_fn() if callable(token_fn) else token_fn
-    llm = SapAiCoreLLM(api_url=API_URL)
 
     def _fresh_token() -> str:
         return _token_fn() if _token_fn else _static_token
@@ -738,7 +723,7 @@ def extract_via_targeted_retrieval(token_fn, API_URL: str, pdf_path: str, conten
         keyword_sets = [group["keywords"]] + group.get("extra_keyword_sets", [])
 
         def _retrieve(query, top_k, rerank_top_n):
-            return retrieve_chunks(content_hash, query, llm, top_k=top_k, rerank_top_n=rerank_top_n)
+            return retrieve_chunks(content_hash, query, top_k=top_k, rerank_top_n=rerank_top_n)
 
         chunks = merge_and_cap_chunks(keyword_sets, _retrieve, max_retrieve, max_chunks)
 

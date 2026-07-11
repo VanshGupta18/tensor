@@ -77,8 +77,7 @@ async function storeOrphanDoc(Documents, { tenderId, filename, mimeType, uploade
 async function processAITenders(entities, ctx, pyTenders) {
   const { Tenders, Documents, AIResults } = entities;
   const { tenderId, filename, mimeType, uploadedBy, uploadedAt } = ctx;
-  const { fmtMoney } = require('./formatters');
-  const { parseDate } = require('./formatters');
+  const { fmtMoney, parseDate } = require('./formatters');
 
   const DEDUP_COLS = ['ID', 'title', 'budget', 'deadline', 'location', 'tenderNo'];
 

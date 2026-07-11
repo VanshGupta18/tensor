@@ -34,12 +34,6 @@ export default function ChatbotPanel({ isOpen, onClose, tenderId = null, onUploa
   // Reset on context change
   useEffect(() => { setMessages([]); }, [tenderId]);
 
-  useEffect(() => {
-    // Disabled so user can scroll tender details
-    // document.body.style.overflow = isOpen ? 'hidden' : '';
-    // return () => { document.body.style.overflow = ''; };
-  }, [isOpen]);
-
   const addMessage = (payload, sender) => {
     setMessages(prev => [...prev, {
       id: crypto.randomUUID(),

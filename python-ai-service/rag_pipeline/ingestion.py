@@ -5,6 +5,7 @@ which was rebuilt per upload and discarded once the request finished. Chunks
 here are parsed once and persisted durably, keyed by the PDF's content hash,
 so the same retrieval can power both the 9-group extraction and chat later.
 """
+import functools
 import os
 from pathlib import Path
 
@@ -30,30 +31,23 @@ EMBED_DIM = 384  # sentence-transformers/all-MiniLM-L6-v2
 EMBED_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
 # ── Singletons (expensive to construct; reused across requests) ────────────
-_embed_model = None
-_vector_store = None
 
-
+@functools.lru_cache(maxsize=None)
 def get_embedding_model() -> HuggingFaceEmbedding:
-    global _embed_model
-    if _embed_model is None:
-        _embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL_NAME, device=ML_DEVICE)
-    return _embed_model
+    return HuggingFaceEmbedding(model_name=EMBED_MODEL_NAME, device=ML_DEVICE)
 
 
+@functools.lru_cache(maxsize=None)
 def get_vector_store() -> PGVectorStore:
-    global _vector_store
-    if _vector_store is None:
-        _vector_store = PGVectorStore.from_params(
-            connection_string=POSTGRES_URL,
-            async_connection_string=POSTGRES_URL.replace(
-                "postgresql://", "postgresql+asyncpg://"
-            ),
-            table_name="tender_chunks",
-            embed_dim=EMBED_DIM,
-            use_jsonb=True,
-        )
-    return _vector_store
+    return PGVectorStore.from_params(
+        connection_string=POSTGRES_URL,
+        async_connection_string=POSTGRES_URL.replace(
+            "postgresql://", "postgresql+asyncpg://"
+        ),
+        table_name="tender_chunks",
+        embed_dim=EMBED_DIM,
+        use_jsonb=True,
+    )
 
 
 def get_storage_context() -> StorageContext:

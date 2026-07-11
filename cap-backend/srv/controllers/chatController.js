@@ -1,13 +1,7 @@
 'use strict';
 
 const cds = require('@sap/cds');
-let axios;
-try {
-  axios = require('axios');
-} catch {
-  console.warn('[chatController] axios not installed – stream chat will fail.');
-}
-
+const axios = require('axios');
 const { PYTHON_AI_URL } = require('../services/aiService');
 const { getLatestContentHash } = require('../utils/documentLookup');
 
@@ -46,8 +40,6 @@ const streamChatHandler = async (req, res) => {
   const contentHash = await getLatestContentHash(tenderId);
 
   try {
-    if (!axios) throw new Error('axios is not installed on the server.');
-
     const pyRes = await axios.post(
       `${PYTHON_AI_URL}/stream-response`,
       { message, tenderId: pythonTenderRef, history: Array.isArray(history) ? history : [], contentHash },

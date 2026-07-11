@@ -89,7 +89,7 @@ const formatProgressivePayment = row => {
   return detail || '—';
 };
 
-export const formatSmart = v => {
+const formatSmart = v => {
   if (v === null || v === undefined || v === '' || v === 'None' || v === 'null') return '';
   if (typeof v === 'boolean') return v ? 'Yes' : 'No';
   if (isMoney(v)) {
@@ -109,19 +109,53 @@ export const formatSmart = v => {
 const TH = { padding: '7px 10px', fontSize: '12px', fontWeight: 600, background: 'var(--bg-hover,#f9fafb)', color: 'var(--text-muted)', textAlign: 'left', borderBottom: '1px solid var(--border-color,#e5e7eb)' };
 const TD = { padding: '8px 10px', fontSize: '13px', verticalAlign: 'top', borderBottom: '1px solid var(--border-color,#e5e7eb)' };
 
-export const renderFieldValue = v => {
-  const smart = formatSmart(v);
-  if (smart !== null) return smart || <span style={{ color: 'var(--text-muted)' }}>—</span>;
+// Array shapes that both renderFieldValue (view mode) and renderObjectField (edit mode)
+// know how to render specially, keyed off the fields present on the first element.
+// Each mode looks up the first matching descriptor instead of repeating the same
+// shape-detection if-chain. Shapes with no `edit` renderer (stage/group_name/
+// type+percentage/grade) fall back to the generic numbered-card editor in edit mode,
+// matching the original edit-mode behavior which never handled those shapes specially.
+const isObj = f => f !== null && typeof f === 'object';
 
-  if (Array.isArray(v)) {
-    if (v.length === 0) return <span style={{ color: 'var(--text-muted)' }}>—</span>;
-    const f = v[0];
-    if (typeof f === 'string') return (
+const pairTable = (v, path, keyName, k1, k2, aiEdits, setAiEdits) => (
+  <div key={path} style={{ marginBottom: 12 }}>
+    {keyName && <div style={HEADING}>{titleLabel(keyName)}</div>}
+    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+      <thead><tr><th style={{ ...TH, width: '35%' }}>{titleLabel(k1)}</th><th style={TH}>{titleLabel(k2)}</th></tr></thead>
+      <tbody>
+        {v.map((row, i) => (
+          <tr key={i}>
+            <td style={{ ...TD, verticalAlign: 'top' }}><EditableInput path={`${path}.${i}.${k1}`} value={row[k1]} aiEdits={aiEdits} setAiEdits={setAiEdits} multiline /></td>
+            <td style={{ ...TD, verticalAlign: 'top' }}><EditableInput path={`${path}.${i}.${k2}`} value={row[k2]} aiEdits={aiEdits} setAiEdits={setAiEdits} multiline /></td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+);
+
+const ARRAY_SHAPES = [
+  {
+    test: f => typeof f === 'string' || typeof f === 'number',
+    view: v => (
       <ul style={{ margin: 0, paddingLeft: 18 }}>
         {v.map((s, i) => <li key={i} style={{ paddingBottom: 3, fontSize: '13px' }}>{s}</li>)}
       </ul>
-    );
-    if (f && 'criterion' in f && 'requirement' in f) return (
+    ),
+    edit: (v, path, keyName, aiEdits, setAiEdits) => (
+      <div key={path} style={{ marginBottom: 12 }}>
+        {keyName && <div style={HEADING}>{titleLabel(keyName)}</div>}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {v.map((_, i) => (
+            <EditableInput key={i} path={`${path}.${i}`} value={v[i]} aiEdits={aiEdits} setAiEdits={setAiEdits} multiline />
+          ))}
+        </div>
+      </div>
+    ),
+  },
+  {
+    test: f => isObj(f) && 'criterion' in f && 'requirement' in f,
+    view: v => (
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead><tr><th style={{ ...TH, width: '40%' }}>Criterion</th><th style={TH}>Requirement</th></tr></thead>
         <tbody>{v.map((r, i) => (
@@ -130,8 +164,12 @@ export const renderFieldValue = v => {
           </tr>
         ))}</tbody>
       </table>
-    );
-    if (f && 'category' in f && 'details' in f) return (
+    ),
+    edit: (v, path, keyName, aiEdits, setAiEdits) => pairTable(v, path, keyName, 'criterion', 'requirement', aiEdits, setAiEdits),
+  },
+  {
+    test: f => isObj(f) && 'category' in f && 'details' in f,
+    view: v => (
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead><tr><th style={{ ...TH, width: '30%' }}>Category</th><th style={TH}>Details</th></tr></thead>
         <tbody>{v.map((r, i) => (
@@ -140,8 +178,12 @@ export const renderFieldValue = v => {
           </tr>
         ))}</tbody>
       </table>
-    );
-    if (f && 'component' in f && 'milestone' in f) return (
+    ),
+    edit: (v, path, keyName, aiEdits, setAiEdits) => pairTable(v, path, keyName, 'category', 'details', aiEdits, setAiEdits),
+  },
+  {
+    test: f => isObj(f) && 'component' in f && 'milestone' in f,
+    view: v => (
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead><tr><th style={{ ...TH, width: '35%' }}>Component</th><th style={TH}>Details</th></tr></thead>
         <tbody>{v.map((r, i) => (
@@ -151,8 +193,28 @@ export const renderFieldValue = v => {
           </tr>
         ))}</tbody>
       </table>
-    );
-    if (f && 'component' in f && 'percentage' in f && !('type' in f)) return (
+    ),
+    edit: (v, path, keyName, aiEdits, setAiEdits) => (
+      <div key={path} style={{ marginBottom: 12 }}>
+        {keyName && <div style={HEADING}>{titleLabel(keyName)}</div>}
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr><th style={{ ...TH, width: '25%' }}>Component</th><th style={{ ...TH, width: '45%' }}>Milestone</th><th style={TH}>Percentage</th></tr></thead>
+          <tbody>
+            {v.map((row, i) => (
+              <tr key={i}>
+                <td style={{ ...TD, verticalAlign: 'top' }}><EditableInput path={`${path}.${i}.component`} value={row.component} aiEdits={aiEdits} setAiEdits={setAiEdits} /></td>
+                <td style={{ ...TD, verticalAlign: 'top' }}><EditableInput path={`${path}.${i}.milestone`} value={row.milestone} aiEdits={aiEdits} setAiEdits={setAiEdits} multiline /></td>
+                <td style={{ ...TD, verticalAlign: 'top' }}><EditableInput path={`${path}.${i}.percentage`} value={row.percentage} aiEdits={aiEdits} setAiEdits={setAiEdits} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    ),
+  },
+  {
+    test: f => isObj(f) && 'component' in f && 'percentage' in f && !('type' in f),
+    view: v => (
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead><tr><th style={{ ...TH, width: '35%' }}>Component</th><th style={TH}>Details</th></tr></thead>
         <tbody>{v.map((r, i) => (
@@ -162,15 +224,38 @@ export const renderFieldValue = v => {
           </tr>
         ))}</tbody>
       </table>
-    );
-    if (f && 'stage' in f) return (
+    ),
+    edit: (v, path, keyName, aiEdits, setAiEdits) => (
+      <div key={path} style={{ marginBottom: 12 }}>
+        {keyName && <div style={HEADING}>{titleLabel(keyName)}</div>}
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr><th style={{ ...TH, width: '25%' }}>Component</th><th style={{ ...TH, width: '15%' }}>Percentage</th><th style={TH}>Conditions</th></tr></thead>
+          <tbody>
+            {v.map((row, i) => (
+              <tr key={i}>
+                <td style={{ ...TD, verticalAlign: 'top' }}><EditableInput path={`${path}.${i}.component`} value={row.component} aiEdits={aiEdits} setAiEdits={setAiEdits} /></td>
+                <td style={{ ...TD, verticalAlign: 'top' }}><EditableInput path={`${path}.${i}.percentage`} value={row.percentage} aiEdits={aiEdits} setAiEdits={setAiEdits} /></td>
+                <td style={{ ...TD, verticalAlign: 'top' }}><EditableInput path={`${path}.${i}.conditions`} value={(row.conditions || []).join('; ')} aiEdits={aiEdits} setAiEdits={setAiEdits} multiline /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    ),
+  },
+  {
+    test: f => isObj(f) && 'stage' in f,
+    view: v => (
       <ol style={{ margin: 0, paddingLeft: 20, fontSize: '13px' }}>
         {v.map((m, i) => <li key={i} style={{ paddingBottom: 4 }}>
           <strong>{m.stage}</strong>{m.percentage ? ` — ${m.percentage}` : ''}{m.description ? `: ${m.description}` : ''}
         </li>)}
       </ol>
-    );
-    if (f && 'group_name' in f) return (
+    ),
+  },
+  {
+    test: f => isObj(f) && 'group_name' in f,
+    view: v => (
       <div style={{ fontSize: '13px' }}>
         {v.map((g, i) => (
           <div key={i} style={{ marginBottom: 10 }}>
@@ -179,18 +264,27 @@ export const renderFieldValue = v => {
           </div>
         ))}
       </div>
-    );
-    if (f && 'type' in f && 'percentage' in f) return (
+    ),
+  },
+  {
+    test: f => isObj(f) && 'type' in f && 'percentage' in f,
+    view: v => (
       <div style={{ fontSize: '13px' }}>
         {v.map((g, i) => <div key={i}>{g.type}: {g.percentage || '—'}</div>)}
       </div>
-    );
-    if (f && 'grade' in f) return (
+    ),
+  },
+  {
+    test: f => isObj(f) && 'grade' in f,
+    view: v => (
       <div style={{ fontSize: '13px' }}>
         {v.map((g, i) => <div key={i}>Grade {g.grade}: {g.percentage || '—'}</div>)}
       </div>
-    );
-    if (f && 'name' in f) return (
+    ),
+  },
+  {
+    test: f => isObj(f) && 'name' in f,
+    view: v => (
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
         {v.map((c, i) => (
           <div key={i} style={{ border: '1px solid var(--border-color)', borderRadius: 8, padding: '8px 12px', background: 'var(--bg-hover,#f9fafb)', minWidth: 140 }}>
@@ -201,8 +295,26 @@ export const renderFieldValue = v => {
           </div>
         ))}
       </div>
-    );
-    if (f && 'item' in f && 'formula' in f) return (
+    ),
+    edit: (v, path, keyName, aiEdits, setAiEdits) => (
+      <div key={path} style={{ marginBottom: 12 }}>
+        {keyName && <div style={HEADING}>{titleLabel(keyName)}</div>}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+          {v.map((c, i) => (
+            <div key={i} style={{ border: '1px solid var(--border-color)', borderRadius: 8, padding: 10, background: 'var(--bg-hover,#f9fafb)', minWidth: 180, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <EditableInput path={`${path}.${i}.name`} value={c.name} aiEdits={aiEdits} setAiEdits={setAiEdits} style={{ fontWeight: 600 }} />
+              {'role'  in c && <EditableInput path={`${path}.${i}.role`}  value={c.role}  aiEdits={aiEdits} setAiEdits={setAiEdits} />}
+              {'email' in c && <EditableInput path={`${path}.${i}.email`} value={c.email} aiEdits={aiEdits} setAiEdits={setAiEdits} />}
+              {'phone' in c && <EditableInput path={`${path}.${i}.phone`} value={c.phone} aiEdits={aiEdits} setAiEdits={setAiEdits} />}
+            </div>
+          ))}
+        </div>
+      </div>
+    ),
+  },
+  {
+    test: f => isObj(f) && 'item' in f && 'formula' in f,
+    view: v => (
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead><tr><th style={{ ...TH, width: '25%' }}>Item</th><th style={{ ...TH, width: '45%' }}>Formula</th><th style={TH}>Remark</th></tr></thead>
         <tbody>{v.map((r, i) => (
@@ -213,7 +325,36 @@ export const renderFieldValue = v => {
           </tr>
         ))}</tbody>
       </table>
-    );
+    ),
+    edit: (v, path, keyName, aiEdits, setAiEdits) => (
+      <div key={path} style={{ marginBottom: 12 }}>
+        {keyName && <div style={HEADING}>{titleLabel(keyName)}</div>}
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr><th style={{ ...TH, width: '25%' }}>Item</th><th style={{ ...TH, width: '45%' }}>Formula</th><th style={TH}>Remark</th></tr></thead>
+          <tbody>
+            {v.map((row, i) => (
+              <tr key={i}>
+                <td style={{ ...TD, verticalAlign: 'top' }}><EditableInput path={`${path}.${i}.item`} value={row.item} aiEdits={aiEdits} setAiEdits={setAiEdits} /></td>
+                <td style={{ ...TD, verticalAlign: 'top' }}><EditableInput path={`${path}.${i}.formula`} value={row.formula} aiEdits={aiEdits} setAiEdits={setAiEdits} multiline /></td>
+                <td style={{ ...TD, verticalAlign: 'top' }}><EditableInput path={`${path}.${i}.remark`} value={row.remark} aiEdits={aiEdits} setAiEdits={setAiEdits} multiline /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    ),
+  },
+];
+
+const renderFieldValue = v => {
+  const smart = formatSmart(v);
+  if (smart !== null) return smart || <span style={{ color: 'var(--text-muted)' }}>—</span>;
+
+  if (Array.isArray(v)) {
+    if (v.length === 0) return <span style={{ color: 'var(--text-muted)' }}>—</span>;
+    const f = v[0];
+    const shape = ARRAY_SHAPES.find(s => s.test(f));
+    if (shape) return shape.view(v);
     return (
       <ul style={{ margin: 0, paddingLeft: 18, fontSize: '13px' }}>
         {v.map((item, i) => <li key={i}>{typeof item === 'object' ? Object.values(item).filter(Boolean).join(' · ') : String(item)}</li>)}
@@ -475,127 +616,8 @@ export const renderObjectField = (value, path, keyName, depth = 0, isEditing, ai
       ) : null;
     }
     const first = value[0];
-
-    // progressive payments {component, milestone, percentage}
-    if (first && typeof first === 'object' && 'component' in first && 'milestone' in first) {
-      return (
-        <div key={path} style={{ marginBottom: 12 }}>
-          {keyName && <div style={HEADING}>{titleLabel(keyName)}</div>}
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr><th style={{ ...TH, width: '25%' }}>Component</th><th style={{ ...TH, width: '45%' }}>Milestone</th><th style={TH}>Percentage</th></tr></thead>
-            <tbody>
-              {value.map((row, i) => (
-                <tr key={i}>
-                  <td style={{ ...TD, verticalAlign: 'top' }}><EditableInput path={`${path}.${i}.component`} value={row.component} aiEdits={aiEdits} setAiEdits={setAiEdits} /></td>
-                  <td style={{ ...TD, verticalAlign: 'top' }}><EditableInput path={`${path}.${i}.milestone`} value={row.milestone} aiEdits={aiEdits} setAiEdits={setAiEdits} multiline /></td>
-                  <td style={{ ...TD, verticalAlign: 'top' }}><EditableInput path={`${path}.${i}.percentage`} value={row.percentage} aiEdits={aiEdits} setAiEdits={setAiEdits} /></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      );
-    }
-
-    // advance payments {component, percentage, conditions[]}
-    if (first && typeof first === 'object' && 'component' in first && 'percentage' in first && !('type' in first)) {
-      return (
-        <div key={path} style={{ marginBottom: 12 }}>
-          {keyName && <div style={HEADING}>{titleLabel(keyName)}</div>}
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr><th style={{ ...TH, width: '25%' }}>Component</th><th style={{ ...TH, width: '15%' }}>Percentage</th><th style={TH}>Conditions</th></tr></thead>
-            <tbody>
-              {value.map((row, i) => (
-                <tr key={i}>
-                  <td style={{ ...TD, verticalAlign: 'top' }}><EditableInput path={`${path}.${i}.component`} value={row.component} aiEdits={aiEdits} setAiEdits={setAiEdits} /></td>
-                  <td style={{ ...TD, verticalAlign: 'top' }}><EditableInput path={`${path}.${i}.percentage`} value={row.percentage} aiEdits={aiEdits} setAiEdits={setAiEdits} /></td>
-                  <td style={{ ...TD, verticalAlign: 'top' }}><EditableInput path={`${path}.${i}.conditions`} value={(row.conditions || []).join('; ')} aiEdits={aiEdits} setAiEdits={setAiEdits} multiline /></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      );
-    }
-
-    // item/formula/remark (price variation materials)
-    if (first && typeof first === 'object' && 'item' in first && 'formula' in first) {
-      return (
-        <div key={path} style={{ marginBottom: 12 }}>
-          {keyName && <div style={HEADING}>{titleLabel(keyName)}</div>}
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr><th style={{ ...TH, width: '25%' }}>Item</th><th style={{ ...TH, width: '45%' }}>Formula</th><th style={TH}>Remark</th></tr></thead>
-            <tbody>
-              {value.map((row, i) => (
-                <tr key={i}>
-                  <td style={{ ...TD, verticalAlign: 'top' }}><EditableInput path={`${path}.${i}.item`} value={row.item} aiEdits={aiEdits} setAiEdits={setAiEdits} /></td>
-                  <td style={{ ...TD, verticalAlign: 'top' }}><EditableInput path={`${path}.${i}.formula`} value={row.formula} aiEdits={aiEdits} setAiEdits={setAiEdits} multiline /></td>
-                  <td style={{ ...TD, verticalAlign: 'top' }}><EditableInput path={`${path}.${i}.remark`} value={row.remark} aiEdits={aiEdits} setAiEdits={setAiEdits} multiline /></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      );
-    }
-
-    // criterion/requirement or category/details → editable two-column table, same
-    // shape renderFieldValue uses in view mode.
-    const pairKeys = (first && typeof first === 'object' && 'criterion' in first && 'requirement' in first) ? ['criterion', 'requirement']
-      : (first && typeof first === 'object' && 'category' in first && 'details' in first) ? ['category', 'details']
-      : null;
-    if (pairKeys) {
-      const [k1, k2] = pairKeys;
-      return (
-        <div key={path} style={{ marginBottom: 12 }}>
-          {keyName && <div style={HEADING}>{titleLabel(keyName)}</div>}
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr><th style={{ ...TH, width: '35%' }}>{titleLabel(k1)}</th><th style={TH}>{titleLabel(k2)}</th></tr></thead>
-            <tbody>
-              {value.map((row, i) => (
-                <tr key={i}>
-                  <td style={{ ...TD, verticalAlign: 'top' }}><EditableInput path={`${path}.${i}.${k1}`} value={row[k1]} aiEdits={aiEdits} setAiEdits={setAiEdits} multiline /></td>
-                  <td style={{ ...TD, verticalAlign: 'top' }}><EditableInput path={`${path}.${i}.${k2}`} value={row[k2]} aiEdits={aiEdits} setAiEdits={setAiEdits} multiline /></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      );
-    }
-
-    // contacts {name, role, email} → editable cards, same layout as view mode
-    if (first && typeof first === 'object' && 'name' in first) {
-      return (
-        <div key={path} style={{ marginBottom: 12 }}>
-          {keyName && <div style={HEADING}>{titleLabel(keyName)}</div>}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-            {value.map((c, i) => (
-              <div key={i} style={{ border: '1px solid var(--border-color)', borderRadius: 8, padding: 10, background: 'var(--bg-hover,#f9fafb)', minWidth: 180, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <EditableInput path={`${path}.${i}.name`} value={c.name} aiEdits={aiEdits} setAiEdits={setAiEdits} style={{ fontWeight: 600 }} />
-                {'role'  in c && <EditableInput path={`${path}.${i}.role`}  value={c.role}  aiEdits={aiEdits} setAiEdits={setAiEdits} />}
-                {'email' in c && <EditableInput path={`${path}.${i}.email`} value={c.email} aiEdits={aiEdits} setAiEdits={setAiEdits} />}
-                {'phone' in c && <EditableInput path={`${path}.${i}.phone`} value={c.phone} aiEdits={aiEdits} setAiEdits={setAiEdits} />}
-              </div>
-            ))}
-          </div>
-        </div>
-      );
-    }
-
-    // Plain string/number list → one input per line, no per-item chrome
-    if (typeof first === 'string' || typeof first === 'number') {
-      return (
-        <div key={path} style={{ marginBottom: 12 }}>
-          {keyName && <div style={HEADING}>{titleLabel(keyName)}</div>}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {value.map((_, i) => (
-              <EditableInput key={i} path={`${path}.${i}`} value={value[i]} aiEdits={aiEdits} setAiEdits={setAiEdits} multiline />
-            ))}
-          </div>
-        </div>
-      );
-    }
+    const shape = ARRAY_SHAPES.find(s => s.test(first));
+    if (shape && shape.edit) return shape.edit(value, path, keyName, aiEdits, setAiEdits);
 
     // Fallback for shapes with no dedicated layout: numbered cards instead of a
     // JSON-tree-style indent guide.

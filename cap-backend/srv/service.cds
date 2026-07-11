@@ -9,7 +9,6 @@ using com.tenderflow as db from '../db/schema';
 service TenderService @(path: '/odata/v4/tender') {
 
     // ── Tender CRUD ──────────────────────────────
-    // ── Tender CRUD ──────────────────────────────
     @requires: 'authenticated-user'
     @odata.draft.enabled
     entity Tenders     as projection on db.Tenders
@@ -18,7 +17,6 @@ service TenderService @(path: '/odata/v4/tender') {
             action incrementVersion() returns Tenders;
         };
 
-    // ── Read-only audit log ───────────────────────
     // ── Read-only audit log ───────────────────────
     @requires: 'authenticated-user'
     @readonly

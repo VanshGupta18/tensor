@@ -155,7 +155,6 @@ def _normalize_unknowns(obj):
     return obj
 
 def validate_correctness(synthesized: dict) -> dict:
-    import re as _re3
     tender = (synthesized.get("tenders") or [{}])[0]
     issues = []
 
@@ -179,9 +178,9 @@ def validate_correctness(synthesized: dict) -> dict:
         parts = []
         for cond in (ap.get("conditions") or []):
             cond_str = str(cond)
-            cond_str = _re3.sub(r'(?i)\bbg\s*(?:of)?\s*\d+(?:\.\d+)?\s*%', '', cond_str)
-            cond_str = _re3.sub(r'(?i)\d+(?:\.\d+)?\s*%\s*(?:of\s*)?(?:bg|bank guarantee)', '', cond_str)
-            parts += [float(m) for m in _re3.findall(r'\b(\d+(?:\.\d+)?)\s*%', cond_str)]
+            cond_str = re.sub(r'(?i)\bbg\s*(?:of)?\s*\d+(?:\.\d+)?\s*%', '', cond_str)
+            cond_str = re.sub(r'(?i)\d+(?:\.\d+)?\s*%\s*(?:of\s*)?(?:bg|bank guarantee)', '', cond_str)
+            parts += [float(m) for m in re.findall(r'\b(\d+(?:\.\d+)?)\s*%', cond_str)]
         if headline and parts:
             inst_sum = sum(parts)
             if abs(inst_sum - headline) > 0.5:
@@ -221,7 +220,6 @@ def validate_correctness(synthesized: dict) -> dict:
 _ARRAY_SECTIONS = {"scope_of_work"}
 
 def ensure_schema_completeness(synthesized: dict) -> dict:
-    import copy
     result = copy.deepcopy(synthesized)
     for tender in result.get("tenders", []):
         for section in _REQUIRED_SECTIONS:

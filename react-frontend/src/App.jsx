@@ -8,7 +8,6 @@ const LoginScreen = React.lazy(() => import('./components/LoginScreen'));
 const DashboardScreen = React.lazy(() => import('./components/DashboardScreen'));
 const DetailsScreen = React.lazy(() => import('./components/DetailsScreen'));
 const ChatbotPanel = React.lazy(() => import('./components/ChatbotPanel'));
-const PlaceholderScreen = React.lazy(() => import('./components/layout/PlaceholderScreen.jsx'));
 const AnalyticsScreen = React.lazy(() => import('./components/layout/AnalyticsScreen.jsx'));
 
 function App() {
@@ -160,10 +159,6 @@ function App() {
 
               {screen === 'analytics' && (
                 <AnalyticsScreen />
-              )}
-
-              {['overview', 'documents', 'settings'].includes(screen) && (
-                <PlaceholderScreen screen={screen} />
               )}
             </Suspense>
           </div>

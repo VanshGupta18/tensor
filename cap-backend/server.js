@@ -22,12 +22,7 @@ const { json: parseJson } = require('express');
 const { streamChatHandler } = require('./srv/controllers/chatController');
 const { getLiveAnalyticsHandler } = require('./srv/controllers/analyticsController');
 
-let axios;
-try {
-  axios = require('axios');
-} catch {
-  console.warn('[server] axios not installed – upload progress will be limited.');
-}
+const axios = require('axios');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-for-dev';
 
@@ -81,42 +76,13 @@ function progressFromAnalytics(session) {
   const lastGroup = session.lastGroup || null;
   const elapsed = session.elapsedSec || 0;
 
-  let phase = 'prepare';
-  let stepIndex = 0;
-  let detail = 'Reading document…';
-
-  if (groupsDone > 0) {
-    phase = 'extract';
-    stepIndex = 3 + Math.min(groupsDone, groupsTotal);
-    detail = lastGroup
-      ? `Extracting ${EXTRACTION_GROUP_LABELS[lastGroup] || lastGroup.replace(/_/g, ' ')}`
-      : `Extracting fields (${groupsDone}/${groupsTotal})`;
-  } else if (elapsed >= 12) {
-    phase = 'search';
-    stepIndex = 2;
-    detail = 'Analyzing document…';
-  } else if (elapsed >= 4) {
-    phase = 'index';
-    stepIndex = 1;
-    detail = 'Preparing document…';
-  } else {
-    phase = 'read';
-    stepIndex = 0;
-    detail = 'Reading document…';
-  }
-
-  const basePct = 5;
-  const groupPct = Math.round((groupsDone / groupsTotal) * 75);
-  // Smooth prep ramp: 5→20 over ~30s while waiting for first extraction group
-  const prepPct = groupsDone === 0 ? Math.min(15, elapsed * 0.5) : 0;
-  // Intra-group creep: while a group is running, nudge up to ~12% of one group slot
-  const intraPct = groupsDone > 0 && groupsDone < groupsTotal
-    ? Math.min(12, (elapsed % 45) * 0.25)
-    : 0;
+  const detail = lastGroup
+    ? `Extracting ${EXTRACTION_GROUP_LABELS[lastGroup] || lastGroup.replace(/_/g, ' ')}`
+    : groupsDone > 0
+      ? `Extracting fields (${groupsDone}/${groupsTotal})`
+      : 'Reading document…';
 
   return {
-    phase,
-    stepIndex,
     detail,
     groupsDone,
     groupsTotal,
@@ -125,13 +91,12 @@ function progressFromAnalytics(session) {
     elapsedSec: elapsed,
     inputTokens: session.inputTokens || 0,
     outputTokens: session.outputTokens || 0,
-    percent: Math.min(97, basePct + prepPct + groupPct + intraPct),
+    percent: Math.min(97, 5 + (groupsDone / groupsTotal) * 90),
     analyticsStatus: session.status,
   };
 }
 
 async function fetchAnalyticsSessions() {
-  if (!axios) return [];
   try {
     const { PYTHON_AI_URL } = require('./srv/services/aiService');
     const pyRes = await axios.get(`${PYTHON_AI_URL}/analytics/live`, { timeout: 5_000 });
@@ -163,9 +128,6 @@ cds.on('bootstrap', (app) => {
     }
     next();
   });
-
-  // Apply chat rate limiter before CAP routes are registered
-  app.use('/odata/v4/tender/chat', chatLimiter);
 
   // ── POST /upload ─────────────────────────────────────────────────────────────
   // Receives a multipart PDF from the React frontend, base64-encodes it in-process,

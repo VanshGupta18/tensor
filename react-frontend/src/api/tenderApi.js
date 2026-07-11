@@ -32,8 +32,8 @@ function toReactShape(t) {
       location:              t.location,
       contractor:            t.contractor,
       // AI-extracted fields — everything tender_information contains. key_dates
-      // fields are read from AIResults.rawResponse instead (see useTenderDocuments /
-      // DetailsScreen's aiData.key_dates) — they're not flattened onto Tenders.
+      // fields are read from AIResults.rawResponse instead (see DetailsScreen's
+      // aiData.key_dates) — they're not flattened onto Tenders.
       issuingAuthority: t.issuingAuthority,
       contractType:     t.contractType,
       bidSystem:        t.bidSystem,

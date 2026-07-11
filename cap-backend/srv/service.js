@@ -16,13 +16,7 @@ const cds = require('@sap/cds');
 const { getLatestContentHash } = require('./utils/documentLookup');
 const { processAITenders, storeOrphanDoc } = require('./utils/tenderProcessing');
 
-// ── Lazy-load axios ───────────────────────────────────────────────────────────
-let axios;
-try {
-  axios = require('axios');
-} catch {
-  console.warn('[TenderService] axios not installed – Python AI calls (chat, generatePDF) will fail.');
-}
+const axios = require('axios');
 const { processFileWithAI, PYTHON_AI_URL } = require('./services/aiService');
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -204,8 +198,6 @@ module.exports = cds.service.impl(async function (srv) {
     }
 
     // 2. Generate PDF fresh every time (always use latest template)
-    if (!axios) return req.error(503, 'axios not installed');
-
     let parsed = null;
     try {
       parsed = JSON.parse(aiResult.rawResponse);

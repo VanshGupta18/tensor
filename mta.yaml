@@ -79,8 +79,10 @@ resources:
   - name: tender-postgres
     type: org.cloudfoundry.managed-service
     parameters:
-      service: postgresql
-      service-plan: standard
+      service: postgresql-db
+      service-plan: trial
+      config:
+        extensions: ["vector"]
 
   # ── XSUAA (OAuth2 / authentication) ───────────────────────────────────────
   - name: tender-xsuaa

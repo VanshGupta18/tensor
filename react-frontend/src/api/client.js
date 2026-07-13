@@ -6,7 +6,7 @@
  * In production, set VITE_API_BASE_URL to the deployed CAP URL.
  */
 
-const BASE_URL = (import.meta.env.VITE_API_BASE_URL || '/api') + '/odata/v4/tender';
+const BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '/api') + '/odata/v4/tender';
 
 class ApiError extends Error {
   constructor(message, status) {

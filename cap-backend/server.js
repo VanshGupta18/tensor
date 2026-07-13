@@ -14,6 +14,7 @@
  *   GET  /analytics/live     — same handler, used by Vite dev proxy (strips /api prefix)
  */
 
+const fs     = require('fs');
 const cds    = require('@sap/cds');
 const multer = require('multer');
 const rateLimit = require('express-rate-limit');
@@ -45,6 +46,10 @@ const chatLimiter = rateLimit({
   keyGenerator: (req) => req.ip,
   message: { error: 'Too many chat requests. Slow down.' },
 });
+
+// multer's diskStorage never creates its destination — ensure it exists before
+// the first upload (fresh CF droplets start without it).
+fs.mkdirSync('.tmp/uploads', { recursive: true });
 
 const upload = multer({
   storage: multer.diskStorage({

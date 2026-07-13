@@ -6,6 +6,7 @@ here are parsed once and persisted durably, keyed by the PDF's content hash,
 so the same retrieval can power both the 9-group extraction and chat later.
 """
 import functools
+import json
 import os
 from pathlib import Path
 
@@ -17,9 +18,30 @@ from llama_index.core.vector_stores.types import MetadataFilter, MetadataFilters
 from llama_index.vector_stores.postgres import PGVectorStore
 from llama_index.storage.index_store.postgres import PostgresIndexStore
 
-POSTGRES_URL = os.getenv(
-    "POSTGRES_URL", "postgresql://tenderflow:tenderflow@localhost:5433/tenderflow"
-)
+
+def _resolve_postgres_url() -> str:
+    """On Cloud Foundry, bound-service credentials arrive via VCAP_SERVICES,
+    not a plain env var — POSTGRES_URL/localhost is only used for local dev
+    (docker-compose)."""
+    vcap = os.getenv("VCAP_SERVICES")
+    if vcap:
+        for instances in json.loads(vcap).values():
+            for instance in instances:
+                creds = instance.get("credentials", {})
+                uri = creds.get("uri")
+                if uri:
+                    return uri.replace("postgres://", "postgresql://", 1)
+                if creds.get("hostname") and creds.get("password"):
+                    return (
+                        f"postgresql://{creds['username']}:{creds['password']}"
+                        f"@{creds['hostname']}:{creds.get('port', 5432)}/{creds['dbname']}"
+                    )
+    return os.getenv(
+        "POSTGRES_URL", "postgresql://tenderflow:tenderflow@localhost:5433/tenderflow"
+    )
+
+
+POSTGRES_URL = _resolve_postgres_url()
 
 STORAGE_DIR = Path(__file__).parent.parent / "storage" / "documents"
 STORAGE_DIR.mkdir(parents=True, exist_ok=True)

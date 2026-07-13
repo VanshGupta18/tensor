@@ -7,13 +7,19 @@ build-parameters:
   before-all:
     - builder: custom
       commands:
-        # 1. Build React → outputs to cap-backend/app/ (see vite.config.js outDir)
+        # 1. Build React → outputs to cap-backend/app/ (see vite.config.js outDir).
+        #    tender-cap-srv serves both the static app and the OData API from the
+        #    same origin in production, so the API base has no /api prefix (that
+        #    prefix only exists for the Vite dev-server proxy).
         - npm ci --prefix react-frontend
-        - npm run build --prefix react-frontend
-        # 2. Run cds build — generates gen/srv (Node.js app + React static files)
-        #    and gen/pg (Postgres schema deploy artifacts)
+        - VITE_API_BASE_URL= npm run build --prefix react-frontend
+        # 2. Run cds build — generates gen/srv (Node.js app) and gen/pg (Postgres
+        #    schema deploy artifacts). cds build does NOT copy app/ into gen/srv
+        #    on its own, so step 3 does it explicitly.
         - npm ci --prefix cap-backend
         - npm run build --prefix cap-backend
+        # 3. Copy the built React static files into the deployable srv folder.
+        - cp -r cap-backend/app cap-backend/gen/srv/app
 
 modules:
   # ── Python AI Service ──────────────────────────────────────────────────────
@@ -48,7 +54,7 @@ modules:
   # ── CAP Backend (Node.js service + React static files) ────────────────────
   - name: tender-cap-srv
     type: nodejs
-    path: gen/srv
+    path: cap-backend/gen/srv
     parameters:
       buildpack: nodejs_buildpack
       memory: 512M
@@ -65,12 +71,17 @@ modules:
   # One-shot CF task that pushes schema artifacts into the Postgres instance.
   - name: tender-db-deployer
     type: nodejs
-    path: gen/pg
+    path: cap-backend/gen/pg
     parameters:
       buildpack: nodejs_buildpack
       no-route: true
+      no-start: true
       memory: 256M
       disk-quota: 256M
+      tasks:
+        - name: deploy
+          command: npm start
+          memory: 256M
     requires:
       - name: tender-postgres
 

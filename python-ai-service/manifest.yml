@@ -1,0 +1,6 @@
+applications:
+  - name: python-ai-service
+    memory: 1G
+    disk_quota: 2G
+    buildpacks:
+      - python_buildpack

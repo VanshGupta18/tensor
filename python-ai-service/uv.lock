@@ -2127,17 +2127,18 @@ dependencies = [
     { name = "flask-cors" },
     { name = "gunicorn" },
     { name = "llama-index-core" },
-    { name = "llama-index-embeddings-huggingface" },
     { name = "llama-index-retrievers-bm25" },
     { name = "llama-index-storage-index-store-postgres" },
     { name = "llama-index-vector-stores-postgres" },
-    { name = "pgvector" },
-    { name = "pillow" },
-    { name = "psycopg2-binary" },
     { name = "pymupdf" },
     { name = "python-dotenv" },
     { name = "reportlab" },
     { name = "requests" },
+]
+
+[package.optional-dependencies]
+local-embeddings = [
+    { name = "llama-index-embeddings-huggingface" },
     { name = "sentence-transformers" },
 ]
 
@@ -2152,19 +2153,17 @@ requires-dist = [
     { name = "flask-cors", specifier = ">=5.0" },
     { name = "gunicorn", specifier = ">=21.0" },
     { name = "llama-index-core", specifier = ">=0.14.23" },
-    { name = "llama-index-embeddings-huggingface", specifier = ">=0.7.0" },
+    { name = "llama-index-embeddings-huggingface", marker = "extra == 'local-embeddings'", specifier = ">=0.7.0" },
     { name = "llama-index-retrievers-bm25", specifier = ">=0.7.1" },
     { name = "llama-index-storage-index-store-postgres", specifier = ">=0.6.0" },
     { name = "llama-index-vector-stores-postgres", specifier = ">=0.8.1" },
-    { name = "pgvector", specifier = ">=0.4.2" },
-    { name = "pillow", specifier = ">=11.0" },
-    { name = "psycopg2-binary", specifier = ">=2.9.12" },
     { name = "pymupdf", specifier = ">=1.27" },
     { name = "python-dotenv", specifier = ">=1.1" },
     { name = "reportlab", specifier = ">=4.0" },
     { name = "requests", specifier = ">=2.32" },
-    { name = "sentence-transformers", specifier = ">=5.6.0" },
+    { name = "sentence-transformers", marker = "extra == 'local-embeddings'", specifier = ">=5.6.0" },
 ]
+provides-extras = ["local-embeddings"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=9.1.1" }]

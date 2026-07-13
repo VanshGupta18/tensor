@@ -14,11 +14,8 @@ import fitz  # PyMuPDF
 from llama_index.core import Document, VectorStoreIndex, StorageContext
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core.vector_stores.types import MetadataFilter, MetadataFilters
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.vector_stores.postgres import PGVectorStore
 from llama_index.storage.index_store.postgres import PostgresIndexStore
-
-from rag_pipeline.ml_device import ML_DEVICE
 
 POSTGRES_URL = os.getenv(
     "POSTGRES_URL", "postgresql://tenderflow:tenderflow@localhost:5433/tenderflow"
@@ -30,10 +27,27 @@ STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 EMBED_DIM = 384  # sentence-transformers/all-MiniLM-L6-v2
 EMBED_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
+# Switch embedding backend via .env only — EMBED_PROVIDER=local (default, in-process
+# torch model) | hf_api (hosted HF Inference API, no torch in the venv) | sap_ai_core
+# (not wired yet — add the adapter in embedding_providers.py when ready).
+EMBED_PROVIDER = os.getenv("EMBED_PROVIDER", "local")
+
 # ── Singletons (expensive to construct; reused across requests) ────────────
 
 @functools.lru_cache(maxsize=None)
-def get_embedding_model() -> HuggingFaceEmbedding:
+def get_embedding_model():
+    if EMBED_PROVIDER == "hf_api":
+        from rag_pipeline.embedding_providers import HFInferenceAPIEmbedding
+        return HFInferenceAPIEmbedding(
+            model_name=EMBED_MODEL_NAME, token=os.getenv("HF_TOKEN", "")
+        )
+    if EMBED_PROVIDER == "sap_ai_core":
+        raise NotImplementedError(
+            "EMBED_PROVIDER=sap_ai_core has no adapter yet — implement one in "
+            "embedding_providers.py, or set EMBED_PROVIDER=local/hf_api."
+        )
+    from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+    from rag_pipeline.ml_device import ML_DEVICE
     return HuggingFaceEmbedding(model_name=EMBED_MODEL_NAME, device=ML_DEVICE)
 
 

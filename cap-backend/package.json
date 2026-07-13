@@ -44,7 +44,22 @@
         }
       },
       "auth": {
-        "kind": "xsuaa"
+        "kind": "mocked",
+        "users": {
+          "admin": {
+            "password": "admin",
+            "roles": [
+              "admin",
+              "authenticated-user"
+            ]
+          },
+          "alice": {
+            "password": "alice",
+            "roles": [
+              "authenticated-user"
+            ]
+          }
+        }
       },
       "[development]": {
         "db": {
@@ -55,24 +70,6 @@
             "database": "tenderflow",
             "user": "tenderflow",
             "password": "tenderflow"
-          }
-        },
-        "auth": {
-          "kind": "mocked",
-          "users": {
-            "admin": {
-              "password": "admin",
-              "roles": [
-                "admin",
-                "authenticated-user"
-              ]
-            },
-            "alice": {
-              "password": "alice",
-              "roles": [
-                "authenticated-user"
-              ]
-            }
           }
         }
       }

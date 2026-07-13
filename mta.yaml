@@ -12,7 +12,7 @@ build-parameters:
         #    same origin in production, so the API base has no /api prefix (that
         #    prefix only exists for the Vite dev-server proxy).
         - npm ci --prefix react-frontend
-        - VITE_API_BASE_URL= npm run build --prefix react-frontend
+        - sh -c "VITE_API_BASE_URL= npm run build --prefix react-frontend"
         # 2. Run cds build — generates gen/srv (Node.js app) and gen/pg (Postgres
         #    schema deploy artifacts). cds build does NOT copy app/ into gen/srv
         #    on its own, so step 3 does it explicitly.

@@ -5,7 +5,16 @@ shipping torch/sentence-transformers in the deployed venv.
 from typing import List
 
 import requests
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 from llama_index.core.base.embeddings.base import BaseEmbedding
+
+
+def _is_rate_limited(exc: BaseException) -> bool:
+    return (
+        isinstance(exc, requests.HTTPError)
+        and exc.response is not None
+        and exc.response.status_code == 429
+    )
 
 # api-inference.huggingface.co was retired in favor of the router-based
 # Inference Providers API — see https://huggingface.co/docs/inference-providers
@@ -48,6 +57,14 @@ class GeminiEmbedding(BaseEmbedding):
     api_key: str = ""
     output_dim: int = 768
 
+    # Free-tier quota is request-count limited, not just token-limited — retry
+    # transient 429s with backoff instead of failing the whole ingestion/query.
+    @retry(
+        retry=retry_if_exception(_is_rate_limited),
+        wait=wait_exponential(multiplier=2, min=2, max=30),
+        stop=stop_after_attempt(5),
+        reraise=True,
+    )
     def _embed(self, texts: List[str]) -> List[List[float]]:
         resp = requests.post(
             GEMINI_BATCH_URL.format(model=self.model_name),

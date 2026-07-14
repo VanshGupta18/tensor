@@ -74,6 +74,10 @@ def get_embedding_model():
             model_name=EMBED_MODEL_NAME,
             api_key=os.getenv("GEMINI_API_KEY", ""),
             output_dim=EMBED_DIM,
+            # Larger batches -> fewer HTTP calls against Gemini's request-count-limited
+            # free tier (default is 10; a chunk-heavy PDF would otherwise fire off
+            # many small sequential requests and trip the per-minute quota).
+            embed_batch_size=50,
         )
     if EMBED_PROVIDER == "sap_ai_core":
         raise NotImplementedError(

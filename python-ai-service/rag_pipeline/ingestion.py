@@ -46,13 +46,18 @@ POSTGRES_URL = _resolve_postgres_url()
 STORAGE_DIR = Path(__file__).parent.parent / "storage" / "documents"
 STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
-EMBED_DIM = 384  # sentence-transformers/all-MiniLM-L6-v2
-EMBED_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-
 # Switch embedding backend via .env only — EMBED_PROVIDER=local (default, in-process
-# torch model) | hf_api (hosted HF Inference API, no torch in the venv) | sap_ai_core
-# (not wired yet — add the adapter in embedding_providers.py when ready).
+# torch model) | hf_api (hosted HF Inference API — unreliable free tier, frequent 500s
+# on sentence-transformers/all-MiniLM-L6-v2) | gemini (Google's free embedding API) |
+# sap_ai_core (not wired yet — add the adapter in embedding_providers.py when ready).
 EMBED_PROVIDER = os.getenv("EMBED_PROVIDER", "local")
+
+if EMBED_PROVIDER == "gemini":
+    EMBED_DIM = 768
+    EMBED_MODEL_NAME = "gemini-embedding-001"
+else:
+    EMBED_DIM = 384  # sentence-transformers/all-MiniLM-L6-v2
+    EMBED_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
 # ── Singletons (expensive to construct; reused across requests) ────────────
 
@@ -63,10 +68,17 @@ def get_embedding_model():
         return HFInferenceAPIEmbedding(
             model_name=EMBED_MODEL_NAME, token=os.getenv("HF_TOKEN", "")
         )
+    if EMBED_PROVIDER == "gemini":
+        from rag_pipeline.embedding_providers import GeminiEmbedding
+        return GeminiEmbedding(
+            model_name=EMBED_MODEL_NAME,
+            api_key=os.getenv("GEMINI_API_KEY", ""),
+            output_dim=EMBED_DIM,
+        )
     if EMBED_PROVIDER == "sap_ai_core":
         raise NotImplementedError(
             "EMBED_PROVIDER=sap_ai_core has no adapter yet — implement one in "
-            "embedding_providers.py, or set EMBED_PROVIDER=local/hf_api."
+            "embedding_providers.py, or set EMBED_PROVIDER=local/hf_api/gemini."
         )
     from llama_index.embeddings.huggingface import HuggingFaceEmbedding
     from rag_pipeline.ml_device import ML_DEVICE

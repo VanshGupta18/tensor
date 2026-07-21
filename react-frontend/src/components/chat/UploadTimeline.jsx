@@ -33,7 +33,7 @@ export default function UploadTimeline({ filename, progress, isComplete }) {
   const elapsed = Math.max(localElapsed, p.elapsedSec || 0);
 
   const groupsDone = p.groupsDone || 0;
-  const groupsTotal = p.groupsTotal || 6;
+  const groupsTotal = Math.max(p.groupsTotal || 0, groupsDone) || 7;
   const pctLabel = Math.min(100, Math.round(displayPercent));
 
   const statusLine = isComplete

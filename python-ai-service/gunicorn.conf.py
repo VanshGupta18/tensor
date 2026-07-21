@@ -9,7 +9,7 @@ import sys
 
 _IS_DARWIN = sys.platform == "darwin"
 
-# Single worker: ML models (embedding + reranker) are singletons per process.
+# Single worker: FastEmbed ONNX model is a singleton per process.
 workers = 1
 
 # gthread + PyTorch on macOS triggers MPS/fork crashes — use sync locally.

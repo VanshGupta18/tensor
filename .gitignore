@@ -57,4 +57,8 @@ CLAUDE.md
 .mcp.json
 
 # React build output (rebuilt from CI — do not commit hashed bundles)
-cap-backend/app/assets/
+cap-backend/app/
+
+# Local upload / cache artifacts
+python-ai-service/uploads/cache/
+cap-backend/.tmp/

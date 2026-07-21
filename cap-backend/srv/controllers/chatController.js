@@ -3,14 +3,21 @@
 const cds = require('@sap/cds');
 const axios = require('axios');
 const { PYTHON_AI_URL } = require('../services/aiService');
-const { getLatestContentHash } = require('../utils/documentLookup');
 
-/**
- * Handles streaming chat responses by proxying to the Python AI service.
- * Session-only — no ChatHistories persistence. The frontend never reads chat history
- * back from the server (ChatbotPanel only shows the current in-memory session), so
- * durably storing every message was pure write-only overhead.
- */
+async function getLatestContentHash(tenderId) {
+  if (!tenderId) return '';
+  try {
+    const doc = await SELECT.one.from('TenderService.Documents')
+      .columns('contentHash')
+      .where({ tender_ID: tenderId })
+      .orderBy({ uploadedAt: 'desc' });
+    return doc?.contentHash || '';
+  } catch (e) {
+    console.error('[stream-chat] failed to fetch contentHash:', e.message);
+    return '';
+  }
+}
+
 const streamChatHandler = async (req, res) => {
   const { message, tenderId, history } = req.body || {};
   if (!message) return res.status(400).json({ error: 'message is required' });
@@ -67,6 +74,4 @@ const streamChatHandler = async (req, res) => {
   }
 };
 
-module.exports = {
-  streamChatHandler
-};
+module.exports = { streamChatHandler };

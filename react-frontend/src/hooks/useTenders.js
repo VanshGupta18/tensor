@@ -6,23 +6,36 @@ import {
   submitAuditBatch,
 } from '../api/tenderApi.js';
 
+function applyTenderFormValues(tender, updatedFormValues, username) {
+  return {
+    ...tender,
+    title: updatedFormValues.title,
+    ...(username ? { lastChangedBy: username } : {}),
+    details: {
+      ...tender.details,
+      budget:     updatedFormValues.budget,
+      deadline:   updatedFormValues.deadline,
+      status:     updatedFormValues.status,
+      location:   updatedFormValues.location,
+      contractor: updatedFormValues.contractor,
+    },
+  };
+}
+
 export function useTenders(username) {
   const queryClient = useQueryClient();
 
-  // ── List query ──────────────────────────────────────────────────────────────
   const { data: tenders = [], isLoading: loading, error: queryError } = useQuery({
     queryKey: ['tenders'],
     queryFn: getTenders,
-    enabled: !!username,  // don't fetch before login
+    enabled: !!username,
   });
 
-  // ── markReviewed mutation ───────────────────────────────────────────────────
   const markReviewedMutation = useMutation({
     mutationFn: ({ id }) => markReviewed(id, username),
     onMutate: async ({ id }) => {
       await queryClient.cancelQueries({ queryKey: ['tenders'] });
       const prev = queryClient.getQueryData(['tenders']) || [];
-      // Optimistic: stamp the reviewer immediately
       queryClient.setQueryData(['tenders'],
         prev.map(t => t.id === id ? { ...t, lastReviewedBy: username } : t)
       );
@@ -32,13 +45,11 @@ export function useTenders(username) {
       if (ctx?.prev) queryClient.setQueryData(['tenders'], ctx.prev);
     },
     onSuccess: (_, { id }) => {
-      // Optimistic update already stamped lastReviewedBy — sync to detail cache
       const updated = queryClient.getQueryData(['tenders'])?.find(t => t.id === id);
       if (updated) queryClient.setQueryData(['tender', id], updated);
     },
   });
 
-  // ── saveChanges mutation ────────────────────────────────────────────────────
   const saveChangesMutation = useMutation({
     mutationFn: ({ tenderId, updatedFormValues }) =>
       updateTender(tenderId, updatedFormValues, username),
@@ -47,19 +58,7 @@ export function useTenders(username) {
       const prev = queryClient.getQueryData(['tenders']) || [];
       queryClient.setQueryData(['tenders'], old =>
         (old || []).map(t =>
-          t.id === tenderId
-            ? {
-                ...t,
-                title: updatedFormValues.title,
-                details: {
-                  budget:     updatedFormValues.budget,
-                  deadline:   updatedFormValues.deadline,
-                  status:     updatedFormValues.status,
-                  location:   updatedFormValues.location,
-                  contractor: updatedFormValues.contractor,
-                },
-              }
-            : t
+          t.id === tenderId ? applyTenderFormValues(t, updatedFormValues) : t
         )
       );
       return { prev };
@@ -69,28 +68,14 @@ export function useTenders(username) {
     },
     onSuccess: (_, { tenderId, updatedFormValues }) => {
       queryClient.setQueryData(['tenders'], old =>
-        (old || []).map(t => t.id === tenderId
-          ? {
-              ...t,
-              title:         updatedFormValues.title,
-              lastChangedBy: username,
-              details: {
-                budget:     updatedFormValues.budget,
-                deadline:   updatedFormValues.deadline,
-                status:     updatedFormValues.status,
-                location:   updatedFormValues.location,
-                contractor: updatedFormValues.contractor,
-              },
-            }
-          : t
+        (old || []).map(t =>
+          t.id === tenderId ? applyTenderFormValues(t, updatedFormValues, username) : t
         )
       );
       const updated = queryClient.getQueryData(['tenders'])?.find(t => t.id === tenderId);
       if (updated) queryClient.setQueryData(['tender', tenderId], updated);
     },
   });
-
-  // ── Public API (same interface as before) ───────────────────────────────────
 
   const handleMarkReviewed = async (tender) => {
     await markReviewedMutation.mutateAsync({ id: tender.id });

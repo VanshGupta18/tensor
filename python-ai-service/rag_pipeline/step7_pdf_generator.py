@@ -36,6 +36,8 @@ from reportlab.platypus import (
     TableStyle,
 )
 
+from rag_pipeline.step6_synopsis import prepare_synopsis
+
 # ── Unicode -> Latin-1 substitution map ───────────────────────────────────────
 _CHAR_SUBS = str.maketrans({
     '\u20b9': 'Rs.',
@@ -154,12 +156,15 @@ def _build_banner(tender, styles, page_w):
     org       = ov.get("issuing_authority", "")
     tender_no = ov.get("reference_no", "")
     version   = ov.get("version", "")
+    doi       = ov.get("date_of_issue") or (tender.get("_synopsis_meta") or {}).get("date_of_issue", "")
 
     rows = [[_p("TENDER SYNOPSIS", styles["BannerTitle"])]]
     if org:
         rows.append([_p(org, styles["BannerOrg"])])
-    if title:
-        rows.append([_p(title, styles["BannerOrg"])])
+    # Avoid repeating the full work title when it duplicates the org line context.
+    if title and title != org and not (org and title.startswith(org[: min(len(org), 40)])):
+        short_title = title if len(title) <= 120 else title[:117].rstrip() + "..."
+        rows.append([_p(short_title, styles["BannerOrg"])])
 
     meta_parts = []
     if tender_no:
@@ -167,6 +172,8 @@ def _build_banner(tender, styles, page_w):
         if version:
             line += f"  |  Version {_safe(version)}"
         meta_parts.append(line)
+    if doi:
+        meta_parts.append(f"Date of Issue: {_safe(doi)}")
     if meta_parts:
         rows.append([_p("  |  ".join(meta_parts), styles["BannerMeta"])])
 
@@ -200,10 +207,12 @@ def _section1_particulars(tender, n, styles, page_w, story):
 
     rows = [[_p("Parameter", styles["ColHeader"]), _p("Details", styles["ColHeader"])]]
     for key in ("title", "reference_no", "version", "issuing_authority",
-                "contract_type", "bid_system", "funding_agency", "budget_category"):
+                "contract_type", "bid_system", "funding_agency", "budget_category",
+                "scheme_code"):
         val = ov.get(key)
         if val:
-            rows.append([_p(key.replace("_", " ").title(), styles["CellLabel"]),
+            label = "Scheme / Project Code" if key == "scheme_code" else key.replace("_", " ").title()
+            rows.append([_p(label, styles["CellLabel"]),
                          _p(val, styles["CellValue"])])
 
     cost = ov.get("estimated_cost") or {}
@@ -242,7 +251,36 @@ def _section2_key_dates(tender, n, styles, page_w, story):
     _heading(story, n, "Key Dates", styles)
 
     rows = [[_p("Event", styles["ColHeader"]), _p("Date & Time", styles["ColHeader"])]]
+    _DATE_LABELS = (
+        ("publication", "Publication / Issue"),
+        ("tender_sale_start", "Tender Sale Start"),
+        ("tender_sale_end", "Tender Sale End / Submission Deadline"),
+        ("pre_bid_meeting", "Pre-Bid Meeting"),
+        ("bid_submission_deadline", "Bid Submission Deadline"),
+        ("technical_opening", "Technical Opening"),
+        ("financial_opening", "Financial Opening"),
+        ("work_order_issuance", "Work Order Issuance"),
+    )
+    seen = set()
+    seen_display = set()
+    for key, label in _DATE_LABELS:
+        val = kd.get(key)
+        if not val or key in seen:
+            continue
+        display = ""
+        if isinstance(val, dict):
+            parts = [val.get("date", ""), val.get("time", ""), val.get("timezone", "")]
+            display = " ".join(p for p in parts if p).strip()
+        elif isinstance(val, str):
+            display = val
+        if display and display.lower() not in seen_display:
+            rows.append([_p(label, styles["CellLabel"]), _p(display, styles["CellValue"])])
+            seen.add(key)
+            seen_display.add(display.lower())
+    # Include any extra date keys not in the standard map.
     for key, val in kd.items():
+        if key in seen:
+            continue
         display = ""
         if isinstance(val, dict):
             parts = [val.get("date", ""), val.get("time", ""), val.get("timezone", "")]
@@ -377,40 +415,78 @@ def _section6_payment_schedule(ft, n, styles, page_w, story):
     prog = ft.get("progressive_payments") or []
     std  = ft.get("standard_timeline_days")
     rate = ft.get("delayed_interest_rate")
+    note = ft.get("payment_timeline_note")
 
-    if not (adv or prog or std or rate):
+    if not (adv or prog or std or rate or note):
         return n
 
     n += 1
-    _heading(story, n, "Payment Schedule", styles)
+    _heading(story, n, "Payment Terms", styles)
 
-    rows = [[_p("Milestone / Component", styles["ColHeader"]),
-             _p("Details", styles["ColHeader"])]]
+    if adv:
+        story.append(Paragraph("Advance Payments", styles["SubLabel"]))
+        rows = [[_p("Contract Part", styles["ColHeader"]),
+                 _p("Advance", styles["ColHeader"]),
+                 _p("Conditions", styles["ColHeader"])]]
+        for a in adv:
+            pct = a.get("percentage")
+            pct_str = f"{pct}%" if pct is not None else ""
+            conds = "; ".join(a.get("conditions") or [])
+            rows.append([
+                _p(_gv(a, "component"), styles["CellLabel"]),
+                _p(pct_str, styles["CellValue"]),
+                _p(conds, styles["CellValue"]),
+            ])
+        col_w = [page_w * 0.28, page_w * 0.12, page_w * 0.60]
+        tbl = Table(rows, colWidths=col_w, repeatRows=1, splitByRow=1)
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), _COL_HDR),
+            ("GRID", (0, 0), (-1, -1), 0.4, _BORDER),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        story.extend([tbl, Spacer(1, 6)])
 
-    for a in adv:
-        conds  = ", ".join(a.get("conditions") or [])
-        detail = f"{_gv(a, 'percentage')}%"
-        if conds:
-            detail += f". Conditions: {conds}"
-        rows.append([_p(f"Advance - {_gv(a, 'component')}", styles["CellLabel"]),
-                     _p(detail, styles["CellValue"])])
+    if prog:
+        story.append(Paragraph("Progressive Payments", styles["SubLabel"]))
+        rows = [[_p("Installment", styles["ColHeader"]),
+                 _p("%", styles["ColHeader"]),
+                 _p("Trigger / Milestone", styles["ColHeader"])]]
+        for pr in prog:
+            comp = _gv(pr, "component")
+            milestone = _gv(pr, "milestone")
+            pct = pr.get("percentage")
+            rows.append([
+                _p(comp or milestone, styles["CellLabel"]),
+                _p(f"{pct}%" if pct is not None else "", styles["CellValue"]),
+                _p(milestone if comp else "", styles["CellValue"]),
+            ])
+        col_w = [page_w * 0.30, page_w * 0.08, page_w * 0.62]
+        tbl = Table(rows, colWidths=col_w, repeatRows=1, splitByRow=1)
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), _COL_HDR),
+            ("GRID", (0, 0), (-1, -1), 0.4, _BORDER),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        story.extend([tbl, Spacer(1, 6)])
 
-    for pr in prog:
-        detail = f"{_gv(pr, 'percentage')}%"
-        if pr.get("milestone"):
-            detail += f" - {pr['milestone']}"
-        rows.append([_p(f"Progressive - {_gv(pr, 'component')}", styles["CellLabel"]),
-                     _p(detail, styles["CellValue"])])
-
+    timeline_parts = []
     if std:
-        rows.append([_p("Standard Timeline", styles["CellLabel"]),
-                     _p(f"{std} days", styles["CellValue"])])
+        timeline_parts.append(f"Released within {std} days of invoice")
     if rate:
-        rows.append([_p("Delayed Interest Rate", styles["CellLabel"]),
-                     _p(str(rate), styles["CellValue"])])
+        timeline_parts.append(f"Delayed payment interest: {rate}")
+    if note:
+        timeline_parts.append(str(note))
+    if timeline_parts:
+        story.append(Paragraph("Payment Timeline: " + ". ".join(timeline_parts), styles["BodyPara"]))
 
-    if len(rows) > 1:
-        story.extend(_kv_table(rows, page_w))
     return n
 
 
@@ -453,6 +529,13 @@ def _section7_price_variation(tender, n, styles, page_w, story):
         ]))
         story.append(tbl)
         story.append(Spacer(1, 6))
+
+    rules = pv.get("key_rules") or []
+    if rules:
+        story.append(Paragraph("Key Rules", styles["SubLabel"]))
+        for rule in rules:
+            story.append(Paragraph(f"- {_safe(rule)}", styles["BulletItem"]))
+        story.append(Spacer(1, 4))
     return n
 
 
@@ -505,7 +588,7 @@ def _section9_technical_bid_docs(cb, tender, n, styles, page_w, story):
     if not tbd:
         tbd = tender.get("technical_bid_documents") or {}
 
-    docs = tbd.get("grouped_documents") or []
+    docs = tbd.get("grouped_documents_synopsis") or tbd.get("grouped_documents") or []
     if not docs:
         return n
 
@@ -526,6 +609,16 @@ def _section9_technical_bid_docs(cb, tender, n, styles, page_w, story):
 # Public entry point
 # =============================================================================
 
+def _footer_canvas(canvas, doc, disclaimer: str):
+    canvas.saveState()
+    canvas.setFont("Helvetica", 8)
+    canvas.setFillColor(colors.HexColor("#64748b"))
+    text = _safe(disclaimer)
+    canvas.drawString(doc.leftMargin, 12 * mm, text[:180])
+    canvas.drawRightString(doc.pagesize[0] - doc.rightMargin, 12 * mm, f"Page {doc.page}")
+    canvas.restoreState()
+
+
 def generate_tender_pdf(tender, doc_title="Tender Synopsis"):
     """
     Build a 9-section A4 PDF from *tender* (new or old schema).
@@ -540,11 +633,15 @@ def generate_tender_pdf(tender, doc_title="Tender Synopsis"):
 
     Returns raw PDF bytes.
     """
+    tender = prepare_synopsis(tender)
+    meta = tender.get("_synopsis_meta") or {}
+    disclaimer = meta.get("disclaimer", "")
+
     buf = BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=A4,
         leftMargin=18 * mm, rightMargin=18 * mm,
-        topMargin=15 * mm, bottomMargin=15 * mm,
+        topMargin=15 * mm, bottomMargin=22 * mm,
         title=doc_title,
     )
     styles = _build_styles()
@@ -574,5 +671,10 @@ def generate_tender_pdf(tender, doc_title="Tender Synopsis"):
     n = _section8_contract_conditions(cb, n, styles, page_w, story)
     n = _section9_technical_bid_docs(cb, tender, n, styles, page_w, story)
 
-    doc.build(story)
+    if disclaimer:
+        story.append(Spacer(1, 12))
+        story.append(Paragraph(f"<i>{_safe(disclaimer)}</i>", styles["BodyPara"]))
+
+    doc.build(story, onFirstPage=lambda c, d: _footer_canvas(c, d, disclaimer),
+              onLaterPages=lambda c, d: _footer_canvas(c, d, disclaimer))
     return buf.getvalue()

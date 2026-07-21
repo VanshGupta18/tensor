@@ -1,6 +1,6 @@
 import React from 'react';
 
-export default function Sidebar({ username, tenderCount, currentScreen, isCollapsed, onToggle, onLogout, onNavigate }) {
+export default function Sidebar({ username, tenderCount, currentScreen, isCollapsed, onToggle, onNavigate }) {
   return (
     <aside className={`sidebar ${isCollapsed ? 'collapsed' : ''}`}>
       <div className="sb-brand">
@@ -57,13 +57,6 @@ export default function Sidebar({ username, tenderCount, currentScreen, isCollap
           <div className="sb-uname">{username || 'User'}</div>
           <div className="sb-urole">Administrator</div>
         </div>
-        <button className="sb-out" onClick={onLogout} title="Sign out" aria-label="Sign out">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
-            <polyline points="16 17 21 12 16 7"/>
-            <line x1="21" y1="12" x2="9" y2="12"/>
-          </svg>
-        </button>
       </div>
     </aside>
   );

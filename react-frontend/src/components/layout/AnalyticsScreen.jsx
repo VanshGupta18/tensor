@@ -13,7 +13,7 @@ const STATUS_STYLES = {
   error:      { background: 'var(--danger-bg, #fee2e2)',  color: 'var(--danger, #991b1b)' },
 };
 
-const StatusBadge = ({ status }) => (
+const SessionStatusChip = ({ status }) => (
   <span style={{
     display: 'inline-block', padding: '2px 10px', borderRadius: '999px',
     fontSize: '12px', fontWeight: 600, textTransform: 'capitalize',
@@ -84,8 +84,8 @@ export default function AnalyticsScreen() {
                   {sessions.map(s => (
                     <tr key={s.id}>
                       <td>{s.filename}</td>
-                      <td><StatusBadge status={s.status} /></td>
-                      <td>{s.groupsDone}/{s.groupsTotal}</td>
+                      <td><SessionStatusChip status={s.status} /></td>
+                      <td>{s.groupsDone}/{Math.max(s.groupsTotal || 0, s.groupsDone || 0)}</td>
                       <td>{s.elapsedSec}s</td>
                       <td>{s.inputTokens || 0}</td>
                       <td>{s.outputTokens || 0}</td>

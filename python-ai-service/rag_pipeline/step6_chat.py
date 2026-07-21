@@ -10,7 +10,7 @@ _CHAT_RETRIEVAL_TOP_K = 15
 _CHAT_RERANK_TOP_N = 8
 
 
-def _retrieve_context(content_hash: str, message: str, api_url: str):
+def _retrieve_context(content_hash: str, message: str):
     """Real clause-level passages for this document, or None if ungroundable
     (no content_hash yet, nothing indexed, or retrieval itself failed) — callers
     fall back to the old document-blind assistant rather than erroring."""
@@ -44,9 +44,9 @@ def _build_chat_messages(message, tender_id="", history=None, context_chunks=Non
         system_line = (
             "You are an AI assistant for tender document management. Answer ONLY using "
             "the tender excerpts below — do not use outside knowledge. Every fact you state "
-            "must include its source page in the form (p.N), taken from the '[PAGE N]' marker "
-            "on the excerpt it came from. If the answer isn't present in these excerpts, say so "
-            "plainly instead of guessing.\n\nTENDER EXCERPTS:\n" + context_block
+            "must include its source page in the form (p.N), taken from the 'PAGE N' marker "
+            "in the chunk header (e.g. [PAGE 4 | Notice Inviting Tender]). If the answer isn't "
+            "present in these excerpts, say so plainly instead of guessing.\n\nTENDER EXCERPTS:\n" + context_block
         )
     else:
         context = f" The user is asking about tender ID '{tender_id}'." if tender_id else ""
@@ -67,7 +67,7 @@ def _build_chat_messages(message, tender_id="", history=None, context_chunks=Non
     return messages
 
 def generate_chat_response(token, API_URL, message, tender_id="", history=None, content_hash=""):
-    context_chunks = _retrieve_context(content_hash, message, API_URL)
+    context_chunks = _retrieve_context(content_hash, message)
     payload = {
         "messages": _build_chat_messages(message, tender_id, history, context_chunks),
         "max_tokens": 512,
@@ -78,7 +78,7 @@ def generate_chat_response(token, API_URL, message, tender_id="", history=None, 
 
 def generate_chat_response_stream(token, API_URL, message, tender_id="", history=None, content_hash=""):
     """Yields text chunks as they arrive from the AI Core streaming API."""
-    context_chunks = _retrieve_context(content_hash, message, API_URL)
+    context_chunks = _retrieve_context(content_hash, message)
     payload = {
         "messages": _build_chat_messages(message, tender_id, history, context_chunks),
         "max_tokens": 512,

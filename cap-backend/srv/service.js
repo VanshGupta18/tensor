@@ -9,15 +9,31 @@
  *   - Chat message relay (session-only, no DB persistence)
  *
  * Python AI service base URL is configured via env var:
- *   PYTHON_AI_URL  (default: http://localhost:8000)
+ *   PYTHON_AI_URL  (default: http://localhost:8002)
  */
 
 const cds = require('@sap/cds');
-const { getLatestContentHash } = require('./utils/documentLookup');
 const { processAITenders, storeOrphanDoc } = require('./utils/tenderProcessing');
 
 const axios = require('axios');
-const { processFileWithAI, PYTHON_AI_URL } = require('./services/aiService');
+const { processFileWithAI, purgeDocumentFromAI, PYTHON_AI_URL } = require('./services/aiService');
+
+async function purgeContentHashIfOrphan(contentHash) {
+  if (!contentHash) return null;
+
+  const stillReferenced = await SELECT.one.from(Documents)
+    .columns('ID')
+    .where({ contentHash });
+
+  if (stillReferenced) {
+    console.log(`[purge] hash ${contentHash.slice(0, 12)}… still referenced — skipping`);
+    return null;
+  }
+
+  const result = await purgeDocumentFromAI(contentHash);
+  console.log(`[purge] removed artifacts for ${contentHash.slice(0, 12)}…`, result);
+  return result;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // NOTE: stream-chat express routes are registered in server.js bootstrap,
@@ -42,22 +58,35 @@ module.exports = cds.service.impl(async function (srv) {
   // ── PATCH Tender: protect PDF-extracted fields ──────────────────────────────
   // version and tenderNo are set by processFile from PDF extraction.
   // Strip them from any direct PATCH so the form auto-saves cannot overwrite them.
-  // To bump the version explicitly, call the incrementVersion() bound action instead.
   srv.before('UPDATE', Tenders, (req) => {
     delete req.data.version;
     delete req.data.tenderNo;
   });
 
-  // ── Bound Action: incrementVersion (explicit call) ──────────────────────────
-  srv.on('incrementVersion', Tenders, async (req) => {
-    const id = req.params[0]?.ID || req.params[0];
-    const existing = await SELECT.one.from(Tenders).where({ ID: id });
-    if (!existing) return req.error(404, `Tender ${id} not found`);
-    const newVersion = (existing.version || 1) + 1;
-    // Use cds.db.run to bypass the service before('UPDATE') guard — this is a deliberate
-    // explicit version bump, not a form auto-save.
-    await cds.db.run(UPDATE(Tenders).set({ version: newVersion }).where({ ID: id }));
-    return SELECT.one.from(Tenders).where({ ID: id });
+  // ── DELETE Tender: collect content hashes, purge AI artifacts after DB delete ─
+  srv.before('DELETE', Tenders, async (req) => {
+    const id = req.data?.ID;
+    if (!id) return;
+
+    const docs = await SELECT.from(Documents)
+      .columns('contentHash')
+      .where({ tender_ID: id });
+
+    req._ = req._ || {};
+    req._.purgeHashes = [...new Set(
+      docs.map(d => d.contentHash).filter(Boolean)
+    )];
+  });
+
+  srv.after('DELETE', Tenders, async (req) => {
+    const hashes = req._?.purgeHashes || [];
+    for (const hash of hashes) {
+      try {
+        await purgeContentHashIfOrphan(hash);
+      } catch (err) {
+        console.error(`[TenderService] purge after delete failed for ${hash.slice(0, 12)}…:`, err.message);
+      }
+    }
   });
 
   // ── Action: login ────────────────────────────────────────────────────────────
@@ -95,6 +124,35 @@ module.exports = cds.service.impl(async function (srv) {
     };
     await INSERT.into(TenderAudits).entries(entry);
     return entry;
+  });
+
+  srv.on('submitAuditBatch', async (req) => {
+    const { tenderId, entries, changedBy } = req.data;
+
+    let items;
+    try {
+      items = JSON.parse(entries);
+    } catch (e) {
+      return req.error(400, `Invalid JSON: ${e.message}`);
+    }
+    if (!Array.isArray(items) || items.length === 0) return [];
+
+    const exists = await SELECT.one.from(Tenders).columns('ID').where({ ID: tenderId });
+    if (!exists) return req.error(404, `Tender ${tenderId} not found`);
+
+    const changedAt = new Date().toISOString();
+    const rows = items.map(({ fieldName, oldVal, newVal, remark }) => ({
+      ID:        cds.utils.uuid(),
+      tender_ID: tenderId,
+      fieldName,
+      oldVal,
+      newVal,
+      remark:    remark || 'No remarks provided',
+      changedBy,
+      changedAt,
+    }));
+    await INSERT.into(TenderAudits).entries(rows);
+    return rows;
   });
 
   // ── Action: processFile ──────────────────────────────────────────────────────
@@ -251,28 +309,6 @@ module.exports = cds.service.impl(async function (srv) {
     }
 
     return pdfBuffer.toString('base64');
-  });
-
-  // ── Action: correctTenderVersion ─────────────────────────────────────────────
-  // One-time correction for tenders whose version was corrupted by the old
-  // auto-increment-on-every-PATCH bug. Uses cds.db.run to bypass the PATCH guard.
-  srv.on('correctTenderVersion', async (req) => {
-    const { tenderId, version } = req.data;
-    if (!tenderId || !version || version < 1) return req.error(400, 'tenderId and a positive version are required');
-    const existing = await SELECT.one.from(Tenders).columns('ID').where({ ID: tenderId });
-    if (!existing) return req.error(404, `Tender ${tenderId} not found`);
-    await cds.db.run(UPDATE(Tenders).set({ version }).where({ ID: tenderId }));
-    return JSON.stringify({ success: true, tenderId, version });
-  });
-
-  // ── Action: getAIResultDetail ────────────────────────────────────────────────
-  // Fetch the full AIResult including rawResponse (LargeString).
-  // Intentionally separate from the OData entity projection so list queries stay lightweight.
-  srv.on('getAIResultDetail', async (req) => {
-    const { id } = req.data;
-    const result = await SELECT.one.from(AIResults).where({ ID: id });
-    if (!result) return req.error(404, `AIResult ${id} not found`);
-    return result;
   });
 
 });

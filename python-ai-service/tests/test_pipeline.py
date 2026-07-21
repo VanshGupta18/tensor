@@ -2,8 +2,6 @@ import hashlib
 import os
 import json
 from dotenv import load_dotenv
-import sys
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from rag_pipeline.step5_extractor import extract_via_targeted_retrieval
 from rag_pipeline.step4_validators import validate_correctness, ensure_schema_completeness

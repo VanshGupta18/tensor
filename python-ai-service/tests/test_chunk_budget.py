@@ -1,9 +1,5 @@
 """Tests for dynamic chunk budget scaling."""
-import os
-import sys
 import unittest
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from rag_pipeline.chunk_budget import compute_chunk_budget, merge_and_cap_chunks
 from rag_pipeline.step1_schemas import _EXTRACTION_GROUPS

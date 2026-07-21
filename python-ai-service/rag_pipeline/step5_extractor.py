@@ -59,6 +59,17 @@ def _find_subsection(section, title):
             return sub
     return None
 
+def _find_subsection_fuzzy(section, *needles):
+    """Match subsection title containing any of the needle phrases."""
+    if not section:
+        return None
+    needles = [n.strip().lower() for n in needles if n]
+    for sub in section.get("subsections", []) or []:
+        title = (sub.get("title") or "").strip().lower()
+        if any(n in title for n in needles):
+            return sub
+    return None
+
 def _field_map(line_items):
     """label (lowercased) -> field line_item, for type=='field' items."""
     out = {}
@@ -167,7 +178,7 @@ def _backfill_reference_no(tender_doc: dict, content_hash: str) -> dict:
     return tender_doc
 
 # Bump when extraction/postprocess logic changes — stale result caches are ignored.
-EXTRACTION_PIPELINE_VERSION = 2
+EXTRACTION_PIPELINE_VERSION = 5
 
 def postprocess_extraction_result(result: dict, content_hash: str = "") -> dict:
     """Normalize, sanitize contacts, and backfill missing reference_no on each tender."""
@@ -189,6 +200,210 @@ def _child_field_value(group, label):
         if child.get("type") == "field" and (child.get("label") or "").strip().lower() == label:
             return child.get("value")
     return None
+
+def _child_field_value_any(group, *labels):
+    for label in labels:
+        v = _child_field_value(group, label)
+        if v is not None and str(v).strip():
+            return v
+    return None
+
+_DLP_EXCLUDE = re.compile(
+    r"warranty|equipment|extended|latent|maintenance\s+period|guarantee\s+period",
+    re.I,
+)
+
+def _collect_dlp_candidates(line_items) -> list:
+    """Gather DLP month values from contract-condition line items."""
+    candidates = []
+    for li in line_items or []:
+        t = li.get("type")
+        if t == "field":
+            label = li.get("label") or ""
+            val = _num(li.get("value"))
+            blob = f"{label} {li.get('value') or ''}"
+            if val is None or _DLP_EXCLUDE.search(blob):
+                continue
+            if "defect liability" in label.lower() or label.strip().lower() == "dlp":
+                candidates.append(val)
+        elif t == "group" and "defect liability" in (li.get("title") or "").lower():
+            for child in li.get("children") or []:
+                v = _num(child.get("value"))
+                if v is not None:
+                    candidates.append(v)
+    return candidates
+
+def _pick_contract_dlp(candidates: list):
+    """Prefer primary contract DLP (typically 6–24 months) over long warranty periods."""
+    if not candidates:
+        return None
+    in_band = [v for v in candidates if 6 <= v <= 24]
+    if in_band:
+        return min(in_band)
+    reasonable = [v for v in candidates if v <= 36]
+    if reasonable:
+        return min(reasonable)
+    return min(candidates)
+
+def _parse_liquidated_damages(items) -> dict:
+    """Parse LD rate + cap from group children or combined field text."""
+    ld = {}
+    gmap = _group_map(items)
+    ld_grp = gmap.get("liquidated damages")
+    if ld_grp:
+        v = _num(_child_field_value_any(ld_grp, "Rate/Week %", "Rate per Week %", "Rate %"))
+        if v is not None:
+            ld["rate_per_week_percent"] = v
+        v = _num(_child_field_value_any(ld_grp, "Cap %", "Maximum %", "Max %", "Cap (%)", "Maximum Cap %"))
+        if v is not None:
+            ld["cap_percent"] = v
+
+    for li in items or []:
+        if li.get("type") != "field":
+            continue
+        label = (li.get("label") or "").lower()
+        val = li.get("value") or ""
+        if "liquidated" not in label and label.strip() != "ld":
+            continue
+        if "rate_per_week_percent" not in ld:
+            m = re.search(r"(\d+(?:\.\d+)?)\s*%\s*per\s*week", val, re.I)
+            if m:
+                ld["rate_per_week_percent"] = float(m.group(1))
+        if "cap_percent" not in ld:
+            m = re.search(r"(?:max(?:imum)?|cap)\s*[:.]?\s*(\d+(?:\.\d+)?)\s*%", val, re.I)
+            if m:
+                ld["cap_percent"] = float(m.group(1))
+    return ld
+
+def _parse_performance_guarantees(items) -> list:
+    """Collect Performance Security + CPG rows from mixed line_item shapes."""
+    guarantees = []
+    seen = set()
+
+    def _add(type_name, pct):
+        key = (type_name or "").strip().lower()
+        if not key or pct is None or key in seen:
+            return
+        seen.add(key)
+        guarantees.append({"type": type_name.strip(), "percentage": pct})
+
+    for r in _table_rows(items, "type", "percentage", "component", "part"):
+        t = (r.get("type") or r.get("component") or r.get("part") or "").strip()
+        pct = _num(r.get("percentage"))
+        if t and pct is not None:
+            _add(t, pct)
+
+    for li in items or []:
+        t = li.get("type")
+        if t == "group":
+            title = (li.get("title") or "").strip()
+            tl = title.lower()
+            if not any(k in tl for k in ("cpg", "performance security", "performance guarantee", "contract performance")):
+                continue
+            pct = _num(_child_field_value_any(li, "Percentage", "Percent", "Rate %"))
+            if pct is not None:
+                _add(title, pct)
+            for child in li.get("children") or []:
+                if child.get("type") == "field" and child.get("label"):
+                    _add(f"{title} — {child['label']}", _num(child.get("value")))
+        elif t == "field":
+            label = (li.get("label") or "").strip()
+            ll = label.lower()
+            if any(k in ll for k in ("cpg", "performance security", "performance guarantee", "contract performance")):
+                _add(label, _num(li.get("value")))
+
+    return guarantees
+
+_TIMELINE_DAY_LABELS = (
+    "Standard Timeline (Days)",
+    "Payment Within (Days)",
+    "Payment Release (Days)",
+    "Payment Timeline (Days)",
+)
+
+def _extract_payment_timeline_days(line_items) -> int | None:
+    """Parse 'N days from invoice' style payment release windows without extra LLM calls."""
+    fmap = _field_map(line_items)
+    for label in _TIMELINE_DAY_LABELS:
+        v = _num(_field_value(fmap, label))
+        if v is not None:
+            return int(v)
+        for k, li in fmap.items():
+            if "day" in k and any(w in k for w in ("timeline", "payment", "release", "within")):
+                v = _num(li.get("value"))
+                if v is not None:
+                    return int(v)
+
+    blob_parts = []
+    for li in line_items or []:
+        if li.get("type") == "field":
+            blob_parts.extend([li.get("label") or "", li.get("value") or "", li.get("description") or ""])
+    blob = " ".join(blob_parts)
+    for pat in (
+        r"(?:within|released?\s+within)\s+(\d+)\s*days?",
+        r"(\d+)\s*days?\s*(?:from|of|after)\s*(?:date\s+of\s+)?(?:invoice|bill|submission|presentation)",
+        r"payment\s+(?:shall\s+be\s+)?(?:made|released)\s+within\s+(\d+)\s*days?",
+    ):
+        m = re.search(pat, blob, re.I)
+        if m:
+            return int(m.group(1))
+    return None
+
+def _contract_condition_items(sections: list) -> list:
+    items = []
+    for sec in sections or []:
+        sub = _find_subsection(sec, "Contract Conditions")
+        if sub:
+            items.extend(sub.get("line_items") or [])
+    return items
+
+def _financial_security_items(sections: list) -> list:
+    items = []
+    for sec in sections or []:
+        sub = _find_subsection(sec, "Security & Financial Terms")
+        if sub:
+            items.extend(sub.get("line_items") or [])
+    return items
+
+def _payment_timeline_items(sections: list) -> list:
+    items = []
+    for sec in sections or []:
+        sub = _find_subsection_fuzzy(sec, "payment timeline")
+        if sub:
+            items.extend(sub.get("line_items") or [])
+    return items
+
+def _normalize_tender_extraction(tender: dict, sections: list) -> None:
+    """Zero-token post-process: DLP selection, LD cap, CPG rows, payment timeline."""
+    cond_items = _contract_condition_items(sections)
+    cb = tender.get("contract_and_bidding") or {}
+
+    dlp = _pick_contract_dlp(_collect_dlp_candidates(cond_items))
+    if dlp is not None:
+        cb["defect_liability_period_months"] = dlp
+
+    ld = _parse_liquidated_damages(cond_items)
+    if ld:
+        cb["liquidated_damages"] = {**(cb.get("liquidated_damages") or {}), **ld}
+
+    if cb:
+        tender["contract_and_bidding"] = cb
+
+    ft = tender.get("financial_terms") or {}
+    guarantees = _parse_performance_guarantees(_financial_security_items(sections))
+    if guarantees:
+        ft["performance_guarantees"] = guarantees
+
+    days = _extract_payment_timeline_days(_payment_timeline_items(sections))
+    if days is None and ft.get("payment_timeline_note"):
+        days = _extract_payment_timeline_days([
+            {"type": "field", "label": "Payment Timeline Note", "value": ft["payment_timeline_note"]},
+        ])
+    if days is not None and not ft.get("standard_timeline_days"):
+        ft["standard_timeline_days"] = days
+
+    if ft:
+        tender["financial_terms"] = ft
 
 def _table_rows(line_items, *keys):
     """All type=='table_row' items' attributes, projected onto `keys` (missing -> None)."""
@@ -382,6 +597,126 @@ def _extract_scope_of_work(sections):
 
     return scope
 
+def _parse_advance_payments(line_items) -> list:
+    """Parse advance payment rows from groups, table_rows, or fields."""
+    advances = []
+    for li in line_items or []:
+        t = li.get("type")
+        if t == "group":
+            title = (li.get("title") or "").strip()
+            for child in li.get("children", []) or []:
+                if child.get("type") != "field" or not child.get("label"):
+                    continue
+                conditions = [c.strip() for c in (child.get("description") or "").split(";") if c.strip()]
+                advances.append({
+                    "component":  child["label"],
+                    "percentage": _num(child.get("value")),
+                    "conditions": conditions,
+                })
+            if title and not li.get("children"):
+                det = li.get("description") or ""
+                if det:
+                    advances.append({"component": title, "percentage": _num(det), "conditions": []})
+        elif t == "table_row":
+            attrs = li.get("attributes") or {}
+            comp = (attrs.get("component") or attrs.get("contract_part")
+                    or attrs.get("part") or attrs.get("item"))
+            pct = _num(attrs.get("percentage") or attrs.get("advance") or attrs.get("percent"))
+            cond_raw = attrs.get("conditions") or attrs.get("trigger") or attrs.get("milestone") or ""
+            conditions = [c.strip() for c in str(cond_raw).split(";") if c.strip()]
+            if comp or pct is not None:
+                advances.append({"component": comp, "percentage": pct, "conditions": conditions})
+        elif t == "field" and li.get("label"):
+            val = li.get("value") or ""
+            if "%" in val or _num(val) is not None:
+                conditions = [c.strip() for c in (li.get("description") or "").split(";") if c.strip()]
+                advances.append({
+                    "component":  li["label"],
+                    "percentage": _num(val),
+                    "conditions": conditions,
+                })
+    return advances
+
+def _parse_progressive_payments(line_items) -> list:
+    """Parse progressive/milestone payment rows."""
+    progressive = []
+    for li in line_items or []:
+        if li.get("type") != "table_row":
+            continue
+        attrs = li.get("attributes") or {}
+        comp = (attrs.get("component") or attrs.get("part")
+                or attrs.get("contract_part") or attrs.get("installment"))
+        milestone = (attrs.get("milestone") or attrs.get("trigger")
+                     or attrs.get("conditions") or attrs.get("stage"))
+        pct = _num(attrs.get("percentage") or attrs.get("percent"))
+        if comp or milestone or pct is not None:
+            progressive.append({
+                "component":  comp,
+                "milestone":  milestone,
+                "percentage": pct,
+            })
+    if progressive:
+        return progressive
+    for r in _table_rows(line_items, "component", "milestone", "percentage"):
+        if r.get("component") or r.get("milestone") or r.get("percentage") is not None:
+            progressive.append({
+                "component":  r.get("component"),
+                "milestone":  r.get("milestone"),
+                "percentage": _num(r.get("percentage")),
+            })
+    return progressive
+
+def _dedupe_payment_rows(rows: list, key: str = "component") -> list:
+    out = []
+    seen = set()
+    for row in rows:
+        ident = (row.get(key) or row.get("milestone") or "").strip().lower()
+        dedupe_key = ident or str(row)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        out.append(row)
+    return out
+
+def _merge_payment_terms(sections: list, ft: dict) -> None:
+    """Merge advance/progressive/timeline data from any section in the tree."""
+    for sec in sections or []:
+        adv_sub = (_find_subsection(sec, "Advance Payments")
+                   or _find_subsection_fuzzy(sec, "advance payment"))
+        if adv_sub:
+            advances = _parse_advance_payments(adv_sub.get("line_items"))
+            if advances:
+                ft["advance_payments"] = _dedupe_payment_rows(
+                    (ft.get("advance_payments") or []) + advances
+                )
+
+        prog_sub = (_find_subsection(sec, "Progressive Payments")
+                    or _find_subsection_fuzzy(sec, "progressive payment", "milestone payment"))
+        if prog_sub:
+            progressive = _parse_progressive_payments(prog_sub.get("line_items"))
+            if progressive:
+                ft["progressive_payments"] = _dedupe_payment_rows(
+                    (ft.get("progressive_payments") or []) + progressive,
+                    key="milestone",
+                )
+
+        timeline_sub = _find_subsection_fuzzy(sec, "payment timeline")
+        if timeline_sub:
+            fmap = _field_map(timeline_sub.get("line_items"))
+            v = _num(_field_value(fmap, "Standard Timeline (Days)"))
+            if v is not None and not ft.get("standard_timeline_days"):
+                ft["standard_timeline_days"] = v
+            v = _field_value(fmap, "Delayed Interest Rate")
+            if v and not ft.get("delayed_interest_rate"):
+                ft["delayed_interest_rate"] = v
+            note = _field_value(fmap, "Payment Timeline Note")
+            if note and not ft.get("payment_timeline_note"):
+                ft["payment_timeline_note"] = note
+            if not ft.get("standard_timeline_days"):
+                days = _extract_payment_timeline_days(timeline_sub.get("line_items"))
+                if days is not None:
+                    ft["standard_timeline_days"] = days
+
 def _sections_to_legacy(sections: list) -> dict:
     """Adapt the generic document tree into the legacy tender-doc dict."""
     tender = {}
@@ -398,6 +733,8 @@ def _sections_to_legacy(sections: list) -> dict:
                 ("Issuing Authority", "issuing_authority"), ("Contract Type", "contract_type"),
                 ("Bid System", "bid_system"), ("Funding Agency", "funding_agency"),
                 ("Budget Category", "budget_category"),
+                ("Scheme / Project Code", "scheme_code"),
+                ("Date of Issue", "date_of_issue"),
             ):
                 v = _field_value(fmap, label)
                 if v:
@@ -443,6 +780,13 @@ def _sections_to_legacy(sections: list) -> dict:
             pub = _field_value(kfmap, "Publication")
             if pub:
                 key_dates["publication"] = pub
+            for label, key in (
+                ("Tender Sale Start", "tender_sale_start"),
+                ("Tender Sale End", "tender_sale_end"),
+            ):
+                v = _date_field(kfmap, label) or _field_value(kfmap, label)
+                if v:
+                    key_dates[key] = v
             for label, key in (
                 ("Pre-Bid Meeting", "pre_bid_meeting"),
                 ("Bid Submission Deadline", "bid_submission_deadline"),
@@ -549,42 +893,22 @@ def _sections_to_legacy(sections: list) -> dict:
             for r in _table_rows(items, "type", "percentage"):
                 if r.get("type") or r.get("percentage") is not None:
                     guarantees.append({"type": r.get("type"), "percentage": _num(r.get("percentage"))})
+            ps_grp = gmap.get("performance security")
+            if ps_grp:
+                v = _num(_child_field_value(ps_grp, "Percentage"))
+                if v is not None:
+                    guarantees.append({"type": "Performance Security", "percentage": v})
             if guarantees:
                 ft["performance_guarantees"] = guarantees
 
-        adv_sub = _find_subsection(sec4, "Advance Payments")
-        if adv_sub:
-            advances = []
-            for li in adv_sub.get("line_items", []) or []:
-                if li.get("type") != "group":
-                    continue
-                for child in li.get("children", []) or []:
-                    if child.get("type") != "field" or not child.get("label"):
-                        continue
-                    conditions = [c.strip() for c in (child.get("description") or "").split(";") if c.strip()]
-                    advances.append({
-                        "component":  child["label"],
-                        "percentage": _num(child.get("value")),
-                        "conditions": conditions,
-                    })
-            if advances:
-                ft["advance_payments"] = advances
-
-        prog_sub = _find_subsection(sec4, "Progressive Payments")
-        if prog_sub:
-            progressive = []
-            for r in _table_rows(prog_sub.get("line_items"), "component", "milestone", "percentage"):
-                if r.get("component") or r.get("milestone") or r.get("percentage") is not None:
-                    progressive.append({
-                        "component":  r.get("component"),
-                        "milestone":  r.get("milestone"),
-                        "percentage": _num(r.get("percentage")),
-                    })
-            if progressive:
-                ft["progressive_payments"] = progressive
-
         if ft:
             tender["financial_terms"] = ft
+
+    # Payment terms may arrive in section 4 (legacy) or dedicated section 4P — merge all.
+    ft = tender.get("financial_terms") or {}
+    _merge_payment_terms(sections, ft)
+    if ft:
+        tender["financial_terms"] = ft
 
     # ── Section 5: Price Variation ───────────────────────────────────────────────
     sec5 = _section_by_id(sections, "5")
@@ -618,6 +942,9 @@ def _sections_to_legacy(sections: list) -> dict:
                     })
             if materials:
                 pv["materials"] = materials
+            rules = _bullets_by_title(items, "Key Rules")
+            if rules:
+                pv["key_rules"] = rules
             if pv:
                 tender["price_variation"] = pv
 
@@ -683,12 +1010,13 @@ def _sections_to_legacy(sections: list) -> dict:
         if cb:
             tender["contract_and_bidding"] = cb
 
+    _normalize_tender_extraction(tender, sections)
     return tender
 
 
 def extract_via_targeted_retrieval(token_fn, API_URL: str, pdf_path: str, content_hash: str, tender_ref: str = "", on_group_done=None) -> dict:
     """
-    on_group_done, if given, is called after each of the 6 groups finishes with
+    on_group_done, if given, is called after each extraction group finishes with
     (group_name, cumulative_usage_dict, groups_completed_count) — lets callers
     (app.py) surface live token/progress counters without persisting anything.
     """
@@ -722,8 +1050,16 @@ def extract_via_targeted_retrieval(token_fn, API_URL: str, pdf_path: str, conten
         max_retrieve, max_chunks = compute_chunk_budget(group, page_count, chunk_count)
         keyword_sets = [group["keywords"]] + group.get("extra_keyword_sets", [])
 
+        section_ids = group.get("section_ids")
+
         def _retrieve(query, top_k, rerank_top_n):
-            return retrieve_chunks(content_hash, query, top_k=top_k, rerank_top_n=rerank_top_n)
+            return retrieve_chunks(
+                content_hash,
+                query,
+                top_k=top_k,
+                rerank_top_n=rerank_top_n,
+                section_ids=section_ids,
+            )
 
         chunks = merge_and_cap_chunks(keyword_sets, _retrieve, max_retrieve, max_chunks)
 

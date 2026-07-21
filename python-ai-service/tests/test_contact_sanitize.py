@@ -1,10 +1,5 @@
 """Tests for contact sanitization and price-variation table adapter."""
 
-import os
-import sys
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from rag_pipeline.step4_validators import _sanitize_contacts, _parse_contact_channels
 from rag_pipeline.step5_extractor import _sections_to_legacy
 

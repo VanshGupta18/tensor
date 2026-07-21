@@ -1,16 +1,19 @@
 """Unit tests for scope-of-work adapter fallbacks in step5_extractor."""
 
-import os
-import sys
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from rag_pipeline.step5_extractor import (
     _collect_scope_items,
     _extract_scope_of_work,
     _sections_to_legacy,
     _extract_reference_no_from_text,
     _backfill_reference_no,
+    _parse_advance_payments,
+    _parse_progressive_payments,
+    _merge_payment_terms,
+    _pick_contract_dlp,
+    _collect_dlp_candidates,
+    _parse_liquidated_damages,
+    _parse_performance_guarantees,
+    _extract_payment_timeline_days,
 )
 
 
@@ -228,3 +231,136 @@ def test_backfill_reference_no_from_nodes():
     with patch("rag_pipeline.step5_extractor.get_document_nodes", return_value=fake_nodes):
         tender = _backfill_reference_no({"tender_overview": {"title": "Test"}}, "fakehash")
     assert tender["tender_overview"]["reference_no"] == "ABC/XYZ/2026/T-99 (Zone A)"
+
+
+def test_parse_advance_payments_table_row():
+    items = [{
+        "type": "table_row",
+        "attributes": {
+            "component": "Supply (Part I)",
+            "percentage": "15",
+            "conditions": "BG of 110%; 2nd after utilization certificate",
+        },
+    }]
+    assert _parse_advance_payments(items) == [{
+        "component": "Supply (Part I)",
+        "percentage": 15,
+        "conditions": ["BG of 110%", "2nd after utilization certificate"],
+    }]
+
+
+def test_parse_progressive_payments_table_row():
+    items = [{
+        "type": "table_row",
+        "attributes": {
+            "component": "Supply",
+            "milestone": "1st installment on receipt at site",
+            "percentage": "60",
+        },
+    }]
+    assert _parse_progressive_payments(items)[0]["percentage"] == 60
+
+
+def test_merge_payment_terms_from_dedicated_section():
+    sections = [{
+        "id": "4P", "number": "4.5", "title": "Payment Terms",
+        "subsections": [
+            {
+                "id": "4P.1", "title": "Advance Payments",
+                "line_items": [{
+                    "type": "table_row",
+                    "attributes": {"component": "Erection (Part II)", "percentage": "10", "conditions": "Mobilization required"},
+                }],
+            },
+            {
+                "id": "4P.2", "title": "Progressive Payments",
+                "line_items": [{
+                    "type": "table_row",
+                    "attributes": {"component": "Supply", "milestone": "Final", "percentage": "10"},
+                }],
+            },
+            {
+                "id": "4P.3", "title": "Payment Timeline",
+                "line_items": [
+                    {"type": "field", "label": "Standard Timeline (Days)", "value": "60"},
+                    {"type": "field", "label": "Delayed Interest Rate", "value": "SBI 1-yr MCLR"},
+                ],
+            },
+        ],
+    }]
+    ft = {}
+    _merge_payment_terms(sections, ft)
+    tender = _sections_to_legacy(sections)
+    assert tender["financial_terms"]["advance_payments"][0]["percentage"] == 10
+    assert tender["financial_terms"]["progressive_payments"][0]["percentage"] == 10
+    assert tender["financial_terms"]["standard_timeline_days"] == 60
+
+
+def test_pick_contract_dlp_prefers_primary_over_warranty():
+    items = [
+        {"type": "field", "label": "Defect Liability Period (Months)", "value": "12"},
+        {"type": "field", "label": "Equipment Warranty Period (Months)", "value": "60"},
+    ]
+    assert _pick_contract_dlp(_collect_dlp_candidates(items)) == 12
+
+
+def test_parse_liquidated_damages_cap_from_combined_field():
+    items = [{"type": "field", "label": "Liquidated Damages", "value": "0.5% per week; maximum 5% of contract price"}]
+    ld = _parse_liquidated_damages(items)
+    assert ld["rate_per_week_percent"] == 0.5
+    assert ld["cap_percent"] == 5
+
+
+def test_parse_performance_guarantees_cpg_rows():
+    items = [
+        {"type": "table_row", "attributes": {"type": "CPG Supply", "percentage": "5"}},
+        {"type": "table_row", "attributes": {"component": "CPG Erection", "percentage": "3"}},
+    ]
+    rows = _parse_performance_guarantees(items)
+    assert len(rows) == 2
+    assert {r["type"] for r in rows} == {"CPG Supply", "CPG Erection"}
+
+
+def test_extract_payment_timeline_days_from_note_text():
+    items = [{"type": "field", "label": "Payment Timeline Note", "value": "Payment within 60 days from invoice submission"}]
+    assert _extract_payment_timeline_days(items) == 60
+
+
+def test_normalize_tender_extraction_end_to_end():
+    sections = [
+        {
+            "id": "4", "title": "Financial Terms & Security",
+            "subsections": [{
+                "id": "4.1", "title": "Security & Financial Terms",
+                "line_items": [
+                    {"type": "table_row", "attributes": {"type": "CPG Supply", "percentage": "5"}},
+                    {"type": "table_row", "attributes": {"type": "CPG Erection", "percentage": "3"}},
+                ],
+            }],
+        },
+        {
+            "id": "4P", "title": "Payment Terms",
+            "subsections": [{
+                "id": "4P.3", "title": "Payment Timeline",
+                "line_items": [
+                    {"type": "field", "label": "Payment Within (Days)", "value": "60"},
+                ],
+            }],
+        },
+        {
+            "id": "6", "title": "Contract & Bidding Conditions",
+            "subsections": [{
+                "id": "6.1", "title": "Contract Conditions",
+                "line_items": [
+                    {"type": "field", "label": "Defect Liability Period (Months)", "value": "12"},
+                    {"type": "field", "label": "Extended Equipment Warranty (Months)", "value": "60"},
+                    {"type": "field", "label": "Liquidated Damages", "value": "0.5% per week, max 5%"},
+                ],
+            }],
+        },
+    ]
+    tender = _sections_to_legacy(sections)
+    assert tender["contract_and_bidding"]["defect_liability_period_months"] == 12
+    assert tender["contract_and_bidding"]["liquidated_damages"]["cap_percent"] == 5
+    assert len(tender["financial_terms"]["performance_guarantees"]) == 2
+    assert tender["financial_terms"]["standard_timeline_days"] == 60

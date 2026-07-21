@@ -11,11 +11,7 @@ service TenderService @(path: '/odata/v4/tender') {
     // ── Tender CRUD ──────────────────────────────
     @requires: 'authenticated-user'
     @odata.draft.enabled
-    entity Tenders     as projection on db.Tenders
-        actions {
-            // Convenience bound action: bump version and return new tender
-            action incrementVersion() returns Tenders;
-        };
+    entity Tenders     as projection on db.Tenders;
 
     // ── Read-only audit log ───────────────────────
     @requires: 'authenticated-user'
@@ -56,6 +52,13 @@ service TenderService @(path: '/odata/v4/tender') {
         changedBy : String
     ) returns TenderAudits;
 
+    /** Batch variant — entries is a JSON array of { fieldName, oldVal, newVal, remark }. */
+    action submitAuditBatch(
+        tenderId  : String,
+        entries   : String,
+        changedBy : String
+    ) returns many TenderAudits;
+
     /**
      * Forward file to Python AI service, store Document + AIResult.
      * Returns the AIResult JSON for display in the chatbot.
@@ -93,21 +96,4 @@ service TenderService @(path: '/odata/v4/tender') {
     action generatePDF(
         tenderId : String
     ) returns String;   // base64-encoded PDF
-
-    /**
-     * Fetch full AIResult detail including rawResponse (LargeString).
-     * Intentionally a separate action so list queries on AIResults stay lightweight.
-     */
-    action getAIResultDetail(
-        id : String
-    ) returns AIResults;
-
-    /**
-     * Correct a tender's version to the value extracted from its source PDF.
-     * Use this once to fix stale versions left by the old auto-increment bug.
-     */
-    action correctTenderVersion(
-        tenderId : String,
-        version  : Integer
-    ) returns String;
 }

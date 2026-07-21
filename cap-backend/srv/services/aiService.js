@@ -3,7 +3,7 @@ const fs = require('fs');
 
 const axios = require('axios');
 const FormData = require('form-data');
-const PYTHON_AI_URL = process.env.PYTHON_AI_URL || 'http://localhost:8000';
+const PYTHON_AI_URL = process.env.PYTHON_AI_URL || 'http://localhost:8002';
 
 /**
  * Sends a PDF to the Python AI Service for parsing.
@@ -22,7 +22,7 @@ async function processFileWithAI(filepath, filename, mimeType) {
 
     const pyRes = await axios.post(`${PYTHON_AI_URL}/process_file`, form, {
       headers: form.getHeaders(),
-      timeout: 600_000
+      timeout: 1_800_000 // 632-page tender exceeded old 600s cap
     });
     pyTenders = pyRes.data?.tenders || null;
   } catch (err) {
@@ -42,7 +42,20 @@ async function processFileWithAI(filepath, filename, mimeType) {
   return { pyTenders, pyError };
 }
 
+/**
+ * Purge all Python-side artifacts for a content hash (cache, PDF, vectors).
+ */
+async function purgeDocumentFromAI(contentHash) {
+  const res = await axios.post(
+    `${PYTHON_AI_URL}/purge_document`,
+    { contentHash },
+    { timeout: 120_000 },
+  );
+  return res.data;
+}
+
 module.exports = {
   processFileWithAI,
-  PYTHON_AI_URL
+  purgeDocumentFromAI,
+  PYTHON_AI_URL,
 };

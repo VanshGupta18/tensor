@@ -4,11 +4,9 @@
   "dependencies": {
     "@cap-js/postgres": "^2",
     "@sap/cds": "^9",
-    "@sap/xssec": "^4.13.3",
     "axios": "^1.18.0",
     "express-rate-limit": "^7",
     "form-data": "^4.0.6",
-    "jsonwebtoken": "^9.0.3",
     "multer": "^2.2.0"
   },
   "devDependencies": {

@@ -193,6 +193,7 @@ _EXTRACTION_GROUPS = [
         "boost_early_pages": True,
         "early_page_max": 10,
         "early_page_slots": 8,
+        "section_ids": ["cover", "nit", "sec-1"],
         "prompt": """Extract ALL basic tender details, key dates, and contact persons. Emit exactly ONE section:
 
 sections: [{
@@ -209,8 +210,10 @@ sections: [{
         {"type": "field", "label": "Bid System", "value": "<e.g. Single/Two-cover>"},
         {"type": "field", "label": "Funding Agency", "value": "<if any>"},
         {"type": "field", "label": "Budget Category", "value": "<if any>"},
+        {"type": "field", "label": "Scheme / Project Code", "value": "<scheme or project code if stated>"},
+        {"type": "field", "label": "Date of Issue", "value": "<issue/publication date as printed>"},
         {"type": "field", "label": "Estimated Cost", "value": "<formatted amount with currency>", "attributes": {"amount": "<number as string>", "currency": "<e.g. INR>", "denomination": "<e.g. Lakhs, Crores, or empty>"}},
-        {"type": "field", "label": "Tender Fee", "value": "<formatted amount with currency>", "attributes": {"amount": "<number as string>", "currency": "<e.g. INR>"}}
+        {"type": "field", "label": "Tender Fee", "value": "<formatted amount including GST breakdown if stated>", "attributes": {"amount": "<base fee number as string>", "currency": "<e.g. INR>"}}
       ]
     },
     {
@@ -223,6 +226,8 @@ sections: [{
       "id": "1.3", "title": "Key Dates", "layout": "table",
       "line_items": [
         {"type": "field", "label": "Publication", "value": "<date, plain string>"},
+        {"type": "field", "label": "Tender Sale Start", "value": "<date when bidding opens / sale starts>"},
+        {"type": "field", "label": "Tender Sale End", "value": "<date when bidding closes / sale ends>"},
         {"type": "field", "label": "Pre-Bid Meeting", "value": "<date time timezone, human readable>", "attributes": {"date": "<YYYY-MM-DD or as stated>", "time": "<time or empty>", "timezone": "<e.g. IST or empty>"}},
         {"type": "field", "label": "Bid Submission Deadline", "value": "<...>", "attributes": {"date": "...", "time": "...", "timezone": "..."}},
         {"type": "field", "label": "Technical Opening", "value": "<...>", "attributes": {"date": "...", "time": "...", "timezone": "..."}},
@@ -252,6 +257,7 @@ Omit any line item, subsection, or the whole 1.2/1.3 subsection entirely if that
             "absolute_max_retrieve": 90,
             "ref_pages": 50, "mega_pages": 600, "priority": "high",
         },
+        "section_ids": ["sec-6", "sec-2"],
         "prompt": """Extract the complete scope of work categories, BOQ summary, and construction details. Emit exactly ONE section:
 
 sections: [{
@@ -259,12 +265,12 @@ sections: [{
   "subsections": [{
     "id": "2.1", "title": "Scope of Work", "layout": "cards",
     "line_items": [
-      {"type": "card", "title": "<work category>", "description": "<details of that category>"}
+      {"type": "card", "title": "<work category>", "description": "<one concise line summarizing that category — not a full spec paragraph>"}
     ]
   }]
 }]
 
-One card per distinct scope-of-work category. Do not invent categories that aren't in the chunks."""
+One card per distinct high-level scope category (typically 6–12 categories). Keep each description to one sentence. Do not invent categories that aren't in the chunks. Prefer work-package headings (e.g. substations, HT lines, civil works) over BOQ line-item granularity."""
     },
     {
         "name": "eligibility_and_qualification",
@@ -272,6 +278,7 @@ One card per distinct scope-of-work category. Do not invent categories that aren
         "max_pages": 10,
         "max_retrieve": 20,
         "max_chunks": 12,
+        "section_ids": ["sec-2"],
         "prompt": """Extract ALL technical and financial eligibility, contractor class requirements, and qualification criteria. Emit exactly ONE section:
 
 sections: [{
@@ -300,16 +307,12 @@ Omit any field/row not present in the chunks."""
     },
     {
         "name": "financial_terms",
-        "keywords": ["earnest money", "emd", "bank guarantee", "performance security", "retention money", "bid validity", "bank details"],
-        # Same dilution risk as tender_overview above: payment-schedule keywords get
-        # their own retrieval query so they don't get crowded out by EMD/security terms.
-        "extra_keyword_sets": [
-            ["advance payment", "progressive payment", "milestone", "ra bill", "running account bill", "delayed payment interest"],
-        ],
-        "max_pages": 12,
-        "max_retrieve": 24,
-        "max_chunks": 16,
-        "prompt": """Extract ALL EMD, performance security, bank details, retention money, bid validity, and all advance/progressive payment milestones and the payment timeline. Emit exactly ONE section:
+        "keywords": ["earnest money", "emd", "bank guarantee", "performance security", "retention money", "bid validity", "bank details", "contract performance guarantee", "cpg"],
+        "max_pages": 10,
+        "max_retrieve": 20,
+        "max_chunks": 14,
+        "section_ids": ["sec-1", "sec-3"],
+        "prompt": """Extract EMD, performance security, CPG, bank details, retention money, and bid validity. Do NOT extract advance/progressive payment schedules here — a separate pass handles those. Emit exactly ONE section:
 
 sections: [{
   "id": "4", "number": "4", "title": "Financial Terms & Security", "order": 4,
@@ -329,29 +332,79 @@ sections: [{
         ]},
         {"type": "field", "label": "Bid Validity (Days)", "value": "<number>"},
         {"type": "field", "label": "Retention Money (%)", "value": "<number>"},
-        {"type": "field", "label": "Standard Timeline (Days)", "value": "<number>"},
-        {"type": "field", "label": "Delayed Interest Rate", "value": "<rate text>"},
-        {"type": "table_row", "attributes": {"type": "<e.g. CPG Supply>", "percentage": "<number>"}}
-      ]
-    },
-    {
-      "id": "4.2", "title": "Advance Payments", "layout": "list",
-      "line_items": [
-        {"type": "group", "title": "Advance Payment", "children": [
-          {"type": "field", "label": "<component, e.g. Supply>", "value": "<percentage>%", "description": "<conditions for this component, semicolon-separated if multiple>"}
+        {"type": "table_row", "attributes": {"type": "<e.g. Performance Security, CPG Supply, CPG Erection>", "percentage": "<number>"}},
+        {"type": "group", "title": "Performance Security", "children": [
+          {"type": "field", "label": "Percentage", "value": "<number>"},
+          {"type": "field", "label": "Notes", "value": "<validity or conditions if stated>"}
         ]}
-      ]
-    },
-    {
-      "id": "4.3", "title": "Progressive Payments", "layout": "table",
-      "line_items": [
-        {"type": "table_row", "attributes": {"component": "<e.g. Supply>", "milestone": "<milestone text>", "percentage": "<number>"}}
       ]
     }
   ]
 }]
 
-Every advance-payment component (Supply, Erection, etc.) is one child field inside the single "Advance Payment" group — do not create a separate group per component. Omit any field/row/group not present in the chunks."""
+Extract Performance Security and Contract Performance Guarantee (CPG) percentages when stated. Use separate table_row entries for CPG Supply and CPG Erection when both appear. Omit any field/row/group not present in the chunks."""
+    },
+    {
+        "name": "payment_terms",
+        "keywords": ["advance payment", "progressive payment", "payment schedule", "milestone payment", "running account bill", "ra bill", "installment", "mobilization advance"],
+        "extra_keyword_sets": [
+            ["supply part", "erection part", "utilization certificate", "completion certificate", "MDCC", "material reconciliation", "delayed payment interest", "payment within"],
+            ["contract price part", "progress payment", "interim payment", "final payment", "release of payment"],
+        ],
+        "max_pages": 14,
+        "chunk_budget": {
+            "min_chunks": 20, "max_chunks": 36,
+            "absolute_max_chunks": 56,
+            "min_retrieve": 32, "max_retrieve": 52,
+            "absolute_max_retrieve": 80,
+            "ref_pages": 80, "mega_pages": 600, "priority": "high",
+        },
+        "section_ids": ["sec-3", "sec-4", "sec-5", "sec-6"],
+        "max_output_tokens": 6144,
+        "prompt": """Extract ALL advance payment and progressive payment milestones, plus payment timeline/interest terms. Emit exactly ONE section:
+
+sections: [{
+  "id": "4P", "number": "4.5", "title": "Payment Terms", "order": 5,
+  "subsections": [
+    {
+      "id": "4P.1", "title": "Advance Payments", "layout": "table",
+      "line_items": [
+        {"type": "table_row", "attributes": {
+          "component": "<contract part e.g. Supply (Part I), Erection (Part II)>",
+          "percentage": "<headline advance %>",
+          "conditions": "<BG/utilization/mobilization conditions; semicolon-separated>"
+        }},
+        {"type": "group", "title": "Advance Payment", "children": [
+          {"type": "field", "label": "<component>", "value": "<percentage>%", "description": "<conditions>"}
+        ]}
+      ]
+    },
+    {
+      "id": "4P.2", "title": "Progressive Payments", "layout": "table",
+      "line_items": [
+        {"type": "table_row", "attributes": {
+          "component": "<Supply|Erection|contract part>",
+          "milestone": "<installment label and trigger e.g. Supply – 1st: receipt at site>",
+          "percentage": "<number>"
+        }}
+      ]
+    },
+    {
+      "id": "4P.3", "title": "Payment Timeline", "layout": "table",
+      "line_items": [
+        {"type": "field", "label": "Standard Timeline (Days)", "value": "<days from invoice to payment>"},
+        {"type": "field", "label": "Delayed Interest Rate", "value": "<rate e.g. SBI 1-yr MCLR>"},
+        {"type": "field", "label": "Payment Timeline Note", "value": "<any summary sentence about payment release>"}
+      ]
+    }
+  ]
+}]
+
+Rules:
+- Extract EVERY advance component (Supply, Erection, etc.) and EVERY progressive milestone row — do not truncate.
+- Standard Timeline (Days) = days from invoice/bill submission to payment release.
+- Prefer table_row for progressive milestones (one row per installment).
+- Omit subsections 4P.1/4P.2/4P.3 entirely if that data is genuinely absent from the chunks."""
     },
     {
         "name": "price_variation",
@@ -368,6 +421,7 @@ Every advance-payment component (Supply, Erection, etc.) is one child field insi
             "absolute_max_retrieve": 70,
             "ref_pages": 80, "mega_pages": 600, "priority": "normal",
         },
+        "section_ids": ["sec-7", "sec-3"],
         "prompt": """Extract ALL price-variation material formulas as table rows — one row per material/item. Emit exactly ONE section:
 
 sections: [{
@@ -376,7 +430,8 @@ sections: [{
     "id": "5.1", "title": "Price Variation", "layout": "table",
     "line_items": [
       {"type": "field", "label": "Is Applicable", "value": "Yes|No"},
-      {"type": "table_row", "attributes": {"item": "<material or item name, e.g. ACSR Conductor>", "formula": "<price variation formula verbatim>", "remark": "<index source and reference, e.g. IEEMA circular>"}}
+      {"type": "table_row", "attributes": {"item": "<material or item name, e.g. ACSR Conductor>", "formula": "<price variation formula verbatim>", "remark": "<index source and reference, e.g. IEEMA circular>"}},
+      {"type": "bullet", "title": "Key Rules", "bullets": ["<general price-variation rule or exclusion stated in the document>"]}
     ]
   }]
 }]
@@ -385,7 +440,9 @@ Rules:
 - Output ONE table_row per distinct material/item formula found in the chunks.
 - Do NOT output separate Firm/Variable Components bullet lists — fold any such summary into remark only if no formula exists for that item.
 - remark = index source, circular reference, or qualifying note (e.g. "Excise duty units"); leave empty if not stated.
-- Extract every formula row even if the table spans multiple pages. Omit rows not present in the chunks."""
+- Extract every formula row even if the table spans multiple pages.
+- Key Rules bullets: general applicability rules (e.g. PV not on advance/erection, effective date, contractor delay exclusions) — omit the bullet item if none are stated.
+- Omit rows not present in the chunks."""
     },
     {
         "name": "contract_and_bidding",
@@ -406,6 +463,7 @@ Rules:
             "absolute_max_retrieve": 100,
             "ref_pages": 60, "mega_pages": 600, "priority": "high",
         },
+        "section_ids": ["sec-3", "sec-4", "sec-5", "sec-6", "sec-7"],
         "prompt": """Extract ALL contract conditions (completion time, defect liability, liquidated damages, quality penalties, special requirements) and the exhaustive list of forms/documents required in the technical bid (Envelope 1). Emit exactly ONE section:
 
 sections: [{
@@ -446,12 +504,14 @@ CRITICAL — Technical Bid Documents (6.2):
 - Include JV-only items (Form 7 Power of Attorney, Form 8 JDU, JV Agreement) as separate bullets when applicable.
 
 CRITICAL — Contract Conditions (6.1):
-- Extract completion time, defect liability, liquidated damages, AND quality penalties when stated.
-- List EVERY distinct special requirement / SCC condition as a separate bullet — do not summarize multiple conditions into one.
+- Extract completion time, defect liability (primary contract DLP from GCC/SCC — not equipment warranty periods), liquidated damages (rate AND maximum cap %), AND quality penalties when stated.
+- Special Requirements bullets: ONLY non-routine contractual obligations (GIS tagging, TPQMA inspection, works licence, subcontracting restrictions, latent defects, etc.). Do NOT list routine turnkey installation/erection duties already implied by scope. Cap at the most material items (max ~8).
 
 Omit any field/row/group not present in the chunks."""
     },
 ]
+
+EXTRACTION_GROUP_COUNT = len(_EXTRACTION_GROUPS)
 
 _REQUIRED_SECTIONS = [
     "tender_overview",

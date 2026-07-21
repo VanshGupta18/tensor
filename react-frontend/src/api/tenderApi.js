@@ -112,28 +112,20 @@ export async function markReviewed(id, username) {
 }
 
 /**
- * Submit one audit entry for a single field change.
- */
-export async function submitAuditEntry({ tenderId, fieldName, oldVal, newVal, remark, changedBy }) {
-  return callAction('submitAudit', { tenderId, fieldName, oldVal, newVal, remark, changedBy });
-}
-
-/**
  * Submit audit entries for multiple fields changed at once.
- * Returns a Promise that resolves when all entries are posted.
  */
 export async function submitAuditBatch(tenderId, changedList, remarksObject, changedBy) {
-  const promises = changedList.map(change =>
-    submitAuditEntry({
-      tenderId,
-      fieldName: change.field,
-      oldVal:    change.oldVal,
-      newVal:    change.newVal,
-      remark:    remarksObject[change.field] || 'No remarks provided',
-      changedBy,
-    })
-  );
-  return Promise.all(promises);
+  const entries = changedList.map(change => ({
+    fieldName: change.field,
+    oldVal:    change.oldVal,
+    newVal:    change.newVal,
+    remark:    remarksObject[change.field] || 'No remarks provided',
+  }));
+  return callAction('submitAuditBatch', {
+    tenderId,
+    entries: JSON.stringify(entries),
+    changedBy,
+  });
 }
 
 /**

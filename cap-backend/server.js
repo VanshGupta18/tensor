@@ -18,14 +18,27 @@ const fs     = require('fs');
 const cds    = require('@sap/cds');
 const multer = require('multer');
 const rateLimit = require('express-rate-limit');
-const jwt       = require('jsonwebtoken');
 const { json: parseJson } = require('express');
 const { streamChatHandler } = require('./srv/controllers/chatController');
-const { getLiveAnalyticsHandler } = require('./srv/controllers/analyticsController');
+const { PYTHON_AI_URL } = require('./srv/services/aiService');
 
 const axios = require('axios');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-for-dev';
+// Synced from Python /health on startup — fallback matches current extraction group count.
+let extractionGroupCount = 7;
+
+async function syncExtractionGroupCount() {
+  try {
+    const res = await axios.get(`${PYTHON_AI_URL}/health`, { timeout: 5_000 });
+    const n = res.data?.extractionGroupCount;
+    if (Number.isFinite(n) && n > 0) {
+      extractionGroupCount = n;
+      console.log(`[analytics] extraction groups total: ${extractionGroupCount}`);
+    }
+  } catch (err) {
+    console.warn('[analytics] could not sync group count from Python /health:', err.message);
+  }
+}
 
 // 10 uploads per user per 15 minutes — prevents AI cost abuse and DB saturation
 const uploadLimiter = rateLimit({
@@ -67,6 +80,7 @@ const EXTRACTION_GROUP_LABELS = {
   scope_of_work: 'Scope of work',
   eligibility_and_qualification: 'Eligibility criteria',
   financial_terms: 'Financial terms',
+  payment_terms: 'Payment terms',
   price_variation: 'Price variation',
   contract_and_bidding: 'Contract & bidding',
 };
@@ -77,7 +91,7 @@ const EXTRACTION_GROUP_LABELS = {
 function progressFromAnalytics(session) {
   if (!session) return null;
   const groupsDone = session.groupsDone || 0;
-  const groupsTotal = session.groupsTotal || 6;
+  const groupsTotal = Math.max(session.groupsTotal || extractionGroupCount, groupsDone, extractionGroupCount);
   const lastGroup = session.lastGroup || null;
   const elapsed = session.elapsedSec || 0;
 
@@ -103,7 +117,6 @@ function progressFromAnalytics(session) {
 
 async function fetchAnalyticsSessions() {
   try {
-    const { PYTHON_AI_URL } = require('./srv/services/aiService');
     const pyRes = await axios.get(`${PYTHON_AI_URL}/analytics/live`, { timeout: 5_000 });
     return pyRes.data?.sessions || [];
   } catch {
@@ -111,29 +124,25 @@ async function fetchAnalyticsSessions() {
   }
 }
 
+async function getLiveAnalyticsHandler(req, res) {
+  try {
+    const pyRes = await axios.get(`${PYTHON_AI_URL}/analytics/live`, { timeout: 10_000 });
+    res.json(pyRes.data);
+  } catch (err) {
+    console.error('[analytics/live] Python call failed:', err.message);
+    res.status(502).json({ error: `Python AI service unavailable: ${err.message}`, sessions: [] });
+  }
+}
+
 // Extend server socket timeout so long AI-processing uploads don't get dropped
-cds.on('listening', ({ server }) => {
+cds.on('listening', async ({ server }) => {
   server.timeout         = 600000;  // 10 min — max time a socket can be idle
   server.keepAliveTimeout = 600000;
   server.headersTimeout  = 610000;  // must be > keepAliveTimeout
+  await syncExtractionGroupCount();
 });
 
 cds.on('bootstrap', (app) => {
-  // ── JWT Authentication Middleware ──────────────────────────────────────────
-  app.use((req, res, next) => {
-    const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      const token = authHeader.split(' ')[1];
-      try {
-        const decoded = jwt.verify(token, JWT_SECRET);
-        req.user = new cds.User({ id: decoded.username, roles: [decoded.role, 'authenticated-user'] });
-      } catch (err) {
-        // invalid or expired token
-      }
-    }
-    next();
-  });
-
   // ── POST /upload ─────────────────────────────────────────────────────────────
   // Receives a multipart PDF from the React frontend, base64-encodes it in-process,
   // and dispatches to the processFile CDS action which forwards to Python AI.
@@ -176,7 +185,7 @@ cds.on('bootstrap', (app) => {
           stepIndex: 0,
           detail: 'Uploading…',
           groupsDone: 0,
-          groupsTotal: 6,
+          groupsTotal: extractionGroupCount,
           percent: 2,
         },
       });
@@ -228,7 +237,7 @@ cds.on('bootstrap', (app) => {
           stepIndex: 0,
           detail: elapsed < 3 ? 'Uploading…' : 'Starting extraction…',
           groupsDone: 0,
-          groupsTotal: 6,
+          groupsTotal: extractionGroupCount,
           percent: Math.min(18, 2 + elapsed * 0.55),
           elapsedSec: elapsed,
         };
@@ -236,10 +245,10 @@ cds.on('bootstrap', (app) => {
     } else if (job.status === 'completed') {
       job.progress = {
         phase: 'done',
-        stepIndex: 6,
+        stepIndex: extractionGroupCount,
         detail: 'Extraction complete',
-        groupsDone: 6,
-        groupsTotal: 6,
+        groupsDone: extractionGroupCount,
+        groupsTotal: extractionGroupCount,
         percent: 100,
       };
     }
@@ -270,5 +279,3 @@ cds.on('bootstrap', (app) => {
 });
 
 module.exports = cds.server;
-
-// Trigger restart

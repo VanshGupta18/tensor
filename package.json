@@ -5,6 +5,6 @@
   "scripts": {
     "backend": "npm run watch --prefix cap-backend",
     "frontend": "npm run dev --prefix react-frontend",
-    "ai": "cd python-ai-service && .venv/bin/gunicorn -c gunicorn.conf.py app:app"
+    "ai": "cd python-ai-service && PORT=8002 .venv/bin/gunicorn -c gunicorn.conf.py app:app"
   }
 }

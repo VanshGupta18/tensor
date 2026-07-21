@@ -70,53 +70,13 @@ export async function streamChatMessage(message, tenderId = null, onChunk, histo
 }
 
 /**
- * Upload a file for AI processing.
- * Sends raw binary as multipart/form-data to /upload — no base64 inflation,
- * avoiding SAP BAS proxy body-size limits that cut large PDFs mid-transfer.
- *
- * @param {File}   file      - Browser File object.
- * @param {string} tenderId  - Optional: context tender ID.
- * @returns {Promise<object>} - Parsed AI result JSON.
- */
-/**
- * Calculate SHA-256 hash of a file using Web Crypto API.
- */
-async function calculateFileHash(file) {
-  const buffer = await file.arrayBuffer();
-  const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-/**
- * Upload a PDF for AI processing.
- *
- * Request path:  Browser → Vite proxy (/upload) → CAP (:4004/upload)
- *                       → Python AI (:8000/process_file)
- *
- * The field name MUST be "invoice" — multer in server.js is keyed to that name.
- * tenderId is optional; when provided, CAP uses it as a duplicate-detection hint.
- *
- * Throws an Error whose message is the human-readable failure reason.
- * The caller (ChatbotPanel) shows err.message directly — do NOT wrap it in
- * another "Upload failed:" prefix here (that causes the double-prefix bug).
+ * Upload a PDF for AI processing (field name must be "invoice" for multer).
  */
 export async function uploadFileForProcessing(file, tenderId = null, onProgress = null) {
   const formData = new FormData();
-  formData.append('invoice', file);           // field name must match multer config
+  formData.append('invoice', file);
   if (tenderId) formData.append('tenderId', tenderId);
-  
-  // Append client-side hash and size for deduplication and validation
-  try {
-    const fileHash = await calculateFileHash(file);
-    formData.append('fileHash', fileHash);
-    formData.append('fileSize', file.size.toString());
-  } catch (err) {
-    console.warn('Failed to calculate file hash:', err);
-  }
 
-  // No Content-Type header — the browser sets it automatically with the
-  // correct multipart boundary when body is FormData.
   const response = await fetch('/upload', { method: 'POST', body: formData });
 
   if (!response.ok) {
@@ -137,20 +97,9 @@ export async function uploadFileForProcessing(file, tenderId = null, onProgress 
     throw new Error(errMsg);
   }
 
-  // The new asynchronous backend immediately returns a 202 Accepted with a jobId
-  if (response.status === 202) {
-    const { jobId } = await response.json();
-    return await pollJobStatus(jobId, onProgress);
-  }
-
-  // Fallback for older synchronous behavior (if still returned)
-  const json = await response.json();
-  const rawString = json?.value ?? json;
-  try {
-    return typeof rawString === 'string' ? JSON.parse(rawString) : rawString;
-  } catch {
-    return { results: [], message: String(rawString) };
-  }
+  // Backend returns 202 Accepted with a jobId for async processing
+  const { jobId } = await response.json();
+  return pollJobStatus(jobId, onProgress);
 }
 
 /**

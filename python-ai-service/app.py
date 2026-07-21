@@ -16,6 +16,7 @@ React → CAP (Node.js) → this service.
 """
 
 import os
+import sys
 import json
 import uuid
 import hashlib
@@ -25,11 +26,16 @@ from collections import OrderedDict
 from io import BytesIO
 from pathlib import Path
 
+sys.stdout.reconfigure(line_buffering=True)  # live logs under gunicorn
+
 from flask import Flask, request, jsonify, send_file, Response
 from flask_cors import CORS
 from dotenv import load_dotenv
 
+load_dotenv()
+
 from rag_pipeline.step2_llm_client import get_token
+from rag_pipeline.step1_schemas import EXTRACTION_GROUP_COUNT
 from rag_pipeline.step5_extractor import (
     extract_via_targeted_retrieval,
     _upload_semaphore,
@@ -41,8 +47,6 @@ from rag_pipeline.step6_chat import generate_chat_response, generate_chat_respon
 from rag_pipeline.step7_pdf_generator import generate_tender_pdf
 
 # ── Environment ────────────────────────────────────────────────────────────────
-load_dotenv()
-
 API_URL = str(os.getenv("MODEL_BASE_URL", "")) + str(os.getenv("MODEL_ENDPOINT", ""))
 
 UPLOAD_DIR = Path(__file__).parent / "uploads"
@@ -62,7 +66,40 @@ CORS(app, resources={r"/*": {"origins": ["http://localhost:4004", "http://127.0.
 # ── Health check ───────────────────────────────────────────────────────────────
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok"})
+    return jsonify({"status": "ok", "extractionGroupCount": EXTRACTION_GROUP_COUNT})
+
+
+# ── POST /purge_document ───────────────────────────────────────────────────────
+# Called by CAP when a tender (or its last document reference) is deleted.
+# Removes extraction cache, stored PDF, pgvector chunks, and index-store refs.
+# ──────────────────────────────────────────────────────────────────────────────
+@app.route("/purge_document", methods=["POST"])
+def purge_document_route():
+    from rag_pipeline.ingestion import purge_document
+
+    data = request.get_json(force=True) or {}
+    content_hash = (data.get("contentHash") or data.get("content_hash") or "").strip().lower()
+    if not content_hash:
+        return jsonify({"error": "contentHash is required"}), 400
+
+    cache_path = CACHE_DIR / f"{content_hash}.json"
+    cache_deleted = False
+    if cache_path.exists():
+        try:
+            cache_path.unlink()
+            cache_deleted = True
+        except Exception:
+            pass
+
+    try:
+        result = purge_document(content_hash)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"error": f"Purge failed: {exc}"}), 500
+
+    result["cacheDeleted"] = cache_deleted
+    return jsonify(result)
 
 
 # ── Live analytics (in-memory only — nothing here is persisted to a database) ───
@@ -82,7 +119,7 @@ def _analytics_start(session_id, filename):
             "filename": filename,
             "status": "processing",
             "groupsDone": 0,
-            "groupsTotal": 6,
+            "groupsTotal": EXTRACTION_GROUP_COUNT,
             "inputTokens": 0,
             "outputTokens": 0,
             "cacheReadTokens": 0,
@@ -100,6 +137,7 @@ def _analytics_progress(session_id, group_name, usage, groups_done):
         if not session:
             return
         session["groupsDone"] = groups_done
+        session["groupsTotal"] = EXTRACTION_GROUP_COUNT
         session["inputTokens"] = usage.get("input_tokens", 0)
         session["outputTokens"] = usage.get("output_tokens", 0)
         session["cacheReadTokens"] = usage.get("cache_read_input_tokens", 0)
@@ -114,6 +152,9 @@ def _analytics_finish(session_id, status="done"):
         if not session:
             return
         session["status"] = status
+        session["groupsTotal"] = EXTRACTION_GROUP_COUNT
+        if status == "done":
+            session["groupsDone"] = EXTRACTION_GROUP_COUNT
         session["elapsedSec"] = round(time.time() - session["startedAt"], 2)
 
 
